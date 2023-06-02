@@ -1,2 +1,33 @@
 # UniVIP
 Unofficial implementation of UniVIP
+
+## Generating bbox proposals
+## Re-generating bounding box proposal generation with selective search
+
+* Replace the code in `selective_search_iou.py` and `/home/utku/Documents/ODTU/CENG502/project/ORL/openselfsup/datasets/selective_search.py` to apply iou_tresh together with selective search for any given min_size (96 and 64 for this paper.).
+
+* Then generate the proposal boxes with selective search for min_size 96 and 64 (64 is used if there are not sufficient)
+
+*NOTE*: If you first filter boxes ith 64 size and apply iou_thresh simultenously, some >=96 might be lost. Hence, using only 64 min_size to generate proposals can produce fewer 96 pixel boxes. If you apply 64 size filter and apply iou_thresh seperately for 96 and 64 pixel sizes, it will be equal to generating different proposal files with 64+iou_trehs and 96+iou_thresh. 64-filter is the fallback.
+
+* Copy the python scripts in `ORL_files` to the repo ORL to run the command `bash dist_selective_search_single_gpu.sh configs/selfsup/orl/coco/stage2/selective_search_train2017.py univip_instances_train2017.json` in ORL (get from `https://github.com/Jiahao000/ORL/tree/2ad64f7389d20cb1d955792aabbe806a7097e6fb` and install runtime.txt dependendencies and install this for selective search `pip3 install opencv-contrib-python --upgrade`).
+
+* You have to re-run the script above to generate proposals again for 64 and 96 min_size.
+
+### Using already generated proposals to create modified proposals UniVIP 
+
+From the repo `https://github.com/Jiahao000/ORL/tree/master`, download the non-filtered object proposals generated with selective search. 
+
+1. Then filter out proposals smaller than 64.
+2. Then apply iou thresh to get 64-pixel proposals.
+
+1. Filter proposals smaller than 96.
+2. Then apply iou thresh to get 64-pixel proposals.
+
+
+- The paper seems to be very similar to a previous paper (ORL) which is mentioned in the related works part of the UniVIP paper. In ORL, box with widht or height smaller than 96 are filtered, look here: https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/openselfsup/datasets/correspondence.py#L52 . 
+- This is the default selective search setting of UniVIP, but if there are not sufficient common objects (K), only the min_size is dropped from 96 to 64. The max ratio is 3 and the max_iou_threshold is 0.5 (there are the same both for ORL and UniVIP: https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/selfsup/orl/coco/stage2/r50_bs512_ep800_generate_all_correspondence.py#L61)
+- The bounding box format of the proposals are (x,y,w,h), I am not sure what x and y are yet (center or upper left corner?)
+
+
+- It creates scenes for every image (every batch new pairs), does a batch have a single image? That would be strange.
