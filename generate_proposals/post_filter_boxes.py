@@ -1,6 +1,11 @@
 """ get_max_iou and box_filter methods were copied from the 
 ORL (Unsupervised Object-Level Representation Learning from Scene Images) paper's github repo:
-https://github.com/Jiahao000/ORL/tree/2ad64f7389d20cb1d955792aabbe806a7097e6fb """
+https://github.com/Jiahao000/ORL/tree/2ad64f7389d20cb1d955792aabbe806a7097e6fb 
+
+Minutes passed.
+30:42 for train
+49:48 for unlabelled dataset
+"""
 
 import numpy as np
 from tqdm import tqdm
@@ -131,7 +136,7 @@ def main(images_dicts):
 
 if __name__ == "__main__":
     # Load data from pickle file
-    TARGET_PKL = "/home/kuartis-dgx1/utku/UniVIP/COCO/train2017_selective_search_proposal_enumerated.pkl"
+    TARGET_PKL = "/home/kuartis-dgx1/utku/UniVIP/COCO/unlabeled2017_selective_search_proposal_enumerated.pkl"
     ic("load_pkl")
     raw_data = load_pkl(TARGET_PKL)
     # Access the dictionary
@@ -139,8 +144,6 @@ if __name__ == "__main__":
     # Create an iterable that includes the original indexes
     ic("filter_proposals")
     filtered_data_64, filtered_data_96 = main(images_dicts=images_dicts)
-    print(filtered_data_64)
-    print(filtered_data_96)
     
     # Save filtered data into separate JSON files
     ic("dump_pkl")

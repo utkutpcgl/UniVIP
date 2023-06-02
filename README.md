@@ -1,8 +1,21 @@
 # UniVIP
 Unofficial implementation of UniVIP
 
-## Generating bbox proposals
-## Re-generating bounding box proposal generation with selective search
+## 1. Generating bbox proposals
+
+### (RECOMMENDED) Using already generated proposals to create filtered bbox proposals 
+
+From the repo `https://github.com/Jiahao000/ORL/tree/master`, download the non-filtered object proposals generated with selective search.
+
+*Repeat the steps below both for train2017 and unlabelled2017 COCO dataset:*
+1. To spead up loading the json file (~5GB) convert it to pickle file with `UniVIP/generate_proposals/json_to_pkl.py` (specifiy the path with `file_path`).
+2. Filter out small bounding boxes with `UniVIP/generate_proposals/post_filter_boxes.py` (specifiy the path with `TARGET_PKL`).
+3. Enumerate the pickle file per image to sort them accordingly with `/home/kuartis-dgx1/utku/UniVIP/dataset/enumerate_bbox.py`. (specifiy the path with `PICKLE_FILE`).
+4. Match boxes with image names with `/home/kuartis-dgx1/utku/UniVIP/dataset/name_pkl.py` (specifiy the path with `TARGET_PKL`). Note that you have to modify `ANNOTATION_INFO` with `instances_train2017.json` or `image_info_unlabeled2017.json` paths from the COCO dataset.
+
+At the end you will have pkl files with bounding box proposals (filtered for 64 and 96 min_size according to UniVIP) and image names matched.
+
+### (NOT RECOMMENDED) Re-generating bounding box proposal generation with selective search
 
 * Replace the code in `selective_search_iou.py` and `/home/utku/Documents/ODTU/CENG502/project/ORL/openselfsup/datasets/selective_search.py` to apply iou_tresh together with selective search for any given min_size (96 and 64 for this paper.).
 
@@ -14,16 +27,8 @@ Unofficial implementation of UniVIP
 
 * You have to re-run the script above to generate proposals again for 64 and 96 min_size.
 
-### Using already generated proposals to create modified proposals UniVIP 
 
-From the repo `https://github.com/Jiahao000/ORL/tree/master`, download the non-filtered object proposals generated with selective search. 
-
-1. Then filter out proposals smaller than 64.
-2. Then apply iou thresh to get 64-pixel proposals.
-
-1. Filter proposals smaller than 96.
-2. Then apply iou thresh to get 64-pixel proposals.
-
+## GENERAL NOTES REGARDING THE PAPER AND IMPLEMENTATION
 
 - The paper seems to be very similar to a previous paper (ORL) which is mentioned in the related works part of the UniVIP paper. In ORL, box with widht or height smaller than 96 are filtered, look here: https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/openselfsup/datasets/correspondence.py#L52 . 
 - This is the default selective search setting of UniVIP, but if there are not sufficient common objects (K), only the min_size is dropped from 96 to 64. The max ratio is 3 and the max_iou_threshold is 0.5 (there are the same both for ORL and UniVIP: https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/selfsup/orl/coco/stage2/r50_bs512_ep800_generate_all_correspondence.py#L61)

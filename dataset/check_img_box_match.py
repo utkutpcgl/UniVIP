@@ -1,3 +1,4 @@
+"""Note that aspect ratio is not protected for UniVIP, resize each image."""
 from tqdm import tqdm
 import pickle
 from icecream import ic
@@ -6,8 +7,9 @@ from pathlib import Path
 import cv2
 
 DEBUG = True
-IMAGES_PATH = Path("/raid/utku/datasets/COCO_dataset/train2017")
+IMAGES_PATH = Path("/raid/utku/datasets/COCO_dataset/unlabeled2017")
 check_images_path = Path("check_images")
+NUM_IMGS = 1000
 
 check_images_path.mkdir(exist_ok=True)
 
@@ -39,16 +41,15 @@ if __name__ == "__main__":
     # Read the JSON file
     # Load data from pickle file
     
-    TARGET_PKL = "/home/kuartis-dgx1/utku/UniVIP/generate_proposals/trial/try_search_filtered_64.pkl"
+    TARGET_PKL = "/home/kuartis-dgx1/utku/UniVIP/COCO_proposals/final_proposals/unlabeled2017_selective_search_proposal_enumerated_filtered_96_with_names.pkl"
     ic("load_pkl")
     raw_data = load_pkl(TARGET_PKL)
-    images_box_list = raw_data["bbox"]
-    print(images_box_list)
+    images_box_dict = raw_data["bbox"]
 
-    images_path_list = get_img_paths(num_imgs=1000)
-    for img_path, bbox_list in tqdm(zip(images_path_list, images_box_list), total=len(images_path_list)):
+    for count, (img_path, bbox_list) in tqdm(list(enumerate(images_box_dict.items()))[:NUM_IMGS]):
         # Read the image
-        img = cv2.imread(str(img_path))
+        img = cv2.imread(str(IMAGES_PATH/ img_path))
+        # resized_img = cv2.resize(img, (640, 640))
 
         # Draw bounding boxes on the image
         for bbox in bbox_list:
@@ -56,7 +57,7 @@ if __name__ == "__main__":
             cv2.rectangle(img, (x, y), (x + width, y + height), (0, 255, 0), 2)
 
         # Display the image with bounding boxes
-        save_path = img_path.name
+        save_path = Path(img_path).name
         cv2.imwrite(str(check_images_path/save_path), img)
 
     # cv2.destroyAllWindows()
