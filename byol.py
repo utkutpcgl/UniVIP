@@ -56,6 +56,23 @@ class RandomApply(nn.Module):
             return x
         return self.fn(x)
 
+def apply_transformations(image_size):
+    """Return necessary transformations applied to the image also."""
+    RandomApply(
+        T.ColorJitter(0.8, 0.8, 0.8, 0.2),
+        p = 0.3
+    )
+    T.RandomGrayscale(p=0.2),
+    T.RandomHorizontalFlip(),
+    RandomApply(
+        T.GaussianBlur((3, 3), (1.0, 2.0)),
+        p = 0.2
+    ),
+    T.RandomResizedCrop((image_size, image_size)),
+    T.Normalize(
+        mean=torch.tensor([0.485, 0.456, 0.406]),
+        std=torch.tensor([0.229, 0.224, 0.225])),
+
 # exponential moving average
 
 class EMA():
@@ -220,6 +237,7 @@ class BYOL(nn.Module):
     def forward(
         self,
         x,
+        img_path,
         return_embedding = False,
         return_projection = True
     ):
@@ -227,8 +245,16 @@ class BYOL(nn.Module):
 
         if return_embedding:
             return self.online_encoder(x, return_projection = return_projection)
+        
+        # Get the proposals for image1 and image2.
+        # select scene images based on the selected autmentations.
+        # scene1,scene2 = select_scenes(img, img_path)
 
         image_one, image_two = self.augment1(x), self.augment2(x)
+
+        # Check if the scenes overlap, if not augment them again (Do not increment current_iteration).
+        # I need the information which regions of the images were cropped and if RandomHorizontalFlip was applied (the region will change accordingly.)
+        # ThenCheck if the scenes contain K objects, if not augment them again.
 
         online_proj_one, _ = self.online_encoder(image_one)
         online_proj_two, _ = self.online_encoder(image_two)
