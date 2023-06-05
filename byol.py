@@ -1,3 +1,6 @@
+"""This code was originaly taken from 
+https://github.com/lucidrains/byol-pytorch/blob/master/byol_pytorch/byol_pytorch.py 
+and modified accordingly."""
 import copy
 import random
 from functools import wraps
@@ -7,11 +10,9 @@ from torch import nn
 import torch.nn.functional as F
 
 from torchvision import transforms as T
+import torchvision.transforms.functional as TF
 
 # helper functions
-
-def default(val, def_val):
-    return def_val if val is None else val
 
 def flatten(t):
     return t.reshape(t.shape[0], -1)
@@ -56,22 +57,6 @@ class RandomApply(nn.Module):
             return x
         return self.fn(x)
 
-def apply_transformations(image_size):
-    """Return necessary transformations applied to the image also."""
-    RandomApply(
-        T.ColorJitter(0.8, 0.8, 0.8, 0.2),
-        p = 0.3
-    )
-    T.RandomGrayscale(p=0.2),
-    T.RandomHorizontalFlip(),
-    RandomApply(
-        T.GaussianBlur((3, 3), (1.0, 2.0)),
-        p = 0.2
-    ),
-    T.RandomResizedCrop((image_size, image_size)),
-    T.Normalize(
-        mean=torch.tensor([0.485, 0.456, 0.406]),
-        std=torch.tensor([0.229, 0.224, 0.225])),
 
 # exponential moving average
 
@@ -177,34 +162,13 @@ class BYOL(nn.Module):
         hidden_layer = -2,
         projection_size = 256,
         projection_hidden_size = 4096,
-        augment_fn = None,
-        augment_fn2 = None,
         moving_average_decay = 0.99,
     ):
         super().__init__()
         self.net = net
 
         # default SimCLR augmentation
-
-        DEFAULT_AUG = torch.nn.Sequential(
-            RandomApply(
-                T.ColorJitter(0.8, 0.8, 0.8, 0.2),
-                p = 0.3
-            ),
-            T.RandomGrayscale(p=0.2),
-            T.RandomHorizontalFlip(),
-            RandomApply(
-                T.GaussianBlur((3, 3), (1.0, 2.0)),
-                p = 0.2
-            ),
-            T.RandomResizedCrop((image_size, image_size)),
-            T.Normalize(
-                mean=torch.tensor([0.485, 0.456, 0.406]),
-                std=torch.tensor([0.229, 0.224, 0.225])),
-        )
-
-        self.augment1 = default(augment_fn, DEFAULT_AUG)
-        self.augment2 = default(augment_fn2, self.augment1)
+        self.image_size = image_size
 
         self.online_encoder = NetWrapper(net, projection_size, projection_hidden_size, layer=hidden_layer)
 
@@ -219,6 +183,44 @@ class BYOL(nn.Module):
 
         # send a mock image tensor to instantiate singleton parameters
         self.forward(torch.randn(2, 3, image_size, image_size, device=device))
+    
+    
+    def transform_image(self, image):
+        # TODO needs pil image as input?
+        # Variables that have to be returned.
+        flipped_bool = False
+        # Apply color jitter with probability 0.3
+        # TODO since the order has to change (with randperm i get_params) I must use ColorJitter below.
+        if random.random() < 0.3:
+            col_jit = T.ColorJitter(0.8, 0.8, 0.8, 0.2)
+            image = col_jit(image)
+
+        # Apply grayscale with probability 0.2
+        if random.random() < 0.2:
+            gray_scale = T.RandomGrayscale(p=0.2)
+            image = gray_scale(image)
+
+        # Apply horizontal flip
+        if random.random() < 0.5:
+            flipped_bool = True
+            image = TF.hflip(image) # Used functional.
+
+        # Apply gaussian blur with probability 0.2
+        if random.random() < 0.2:
+            gaus_blur = T.GaussianBlur((3, 3), (1.0, 2.0))
+            image = gaus_blur(image)
+
+        # Apply random resized crop
+        rand_res_crop = T.RandomResizedCrop((self.image_size, self.image_size))
+        crop_coordinates = top, left, height, width = rand_res_crop.get_params(image, rand_res_crop.scale, rand_res_crop.ratio)
+        # if size is int (not list) smaller edge will be scaled to match this.
+        image = TF.resized_crop(image, top, left, height, width, size=(self.image_size, self. image_size))
+
+        # Normalize the image
+        norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
+        # TODO make sure image is dtype=torch.float32
+        image = norm(image)
+        return image, flipped_bool, crop_coordinates
 
     @singleton('target_encoder')
     def _get_target_encoder(self):
@@ -247,17 +249,18 @@ class BYOL(nn.Module):
             return self.online_encoder(x, return_projection = return_projection)
         
         # Get the proposals for image1 and image2.
-        # select scene images based on the selected autmentations.
-        # scene1,scene2 = select_scenes(img, img_path)
-
-        image_one, image_two = self.augment1(x), self.augment2(x)
+        
+        # I need the information which regions of the images were cropped and if RandomHorizontalFlip was applied (the region will change accordingly.)
+        scene_one, flipped_bool_one, crop_coordinates_one  = self.transform_image(x)
+        scene_two, flipped_bool_two, crop_coordinates_two = self.transform_image(x)
 
         # Check if the scenes overlap, if not augment them again (Do not increment current_iteration).
-        # I need the information which regions of the images were cropped and if RandomHorizontalFlip was applied (the region will change accordingly.)
+        # check_scene_overlap()
         # ThenCheck if the scenes contain K objects, if not augment them again.
+        # check_K_common_objects()
 
-        online_proj_one, _ = self.online_encoder(image_one)
-        online_proj_two, _ = self.online_encoder(image_two)
+        online_proj_one, _ = self.online_encoder(scene_one)
+        online_proj_two, _ = self.online_encoder(scene_two)
 
         online_pred_one = self.online_predictor(online_proj_one)
         online_pred_two = self.online_predictor(online_proj_two)
