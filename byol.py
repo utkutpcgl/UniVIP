@@ -12,6 +12,8 @@ import torch.nn.functional as F
 from torchvision import transforms as T
 import torchvision.transforms.functional as TF
 
+from dataset.dataset import FILTERED_64_PROPOSALS, FILTERED_96_PROPOSALS, get_scene_overlap
+
 # helper functions
 
 def flatten(t):
@@ -184,25 +186,20 @@ class BYOL(nn.Module):
         # send a mock image tensor to instantiate singleton parameters
         self.forward(torch.randn(2, 3, image_size, image_size, device=device))
     
-    
     def transform_image(self, image):
         # TODO needs pil image as input?
-        # Variables that have to be returned.
-        flipped_bool = False
-        # Apply color jitter with probability 0.3
-        # TODO since the order has to change (with randperm i get_params) I must use ColorJitter below.
+        # since the order has to change (with randperm i get_params) I must use ColorJitter below.
         if random.random() < 0.3:
             col_jit = T.ColorJitter(0.8, 0.8, 0.8, 0.2)
             image = col_jit(image)
 
         # Apply grayscale with probability 0.2
-        if random.random() < 0.2:
-            gray_scale = T.RandomGrayscale(p=0.2)
-            image = gray_scale(image)
+        gray_scale = T.RandomGrayscale(p=0.2)
+        image = gray_scale(image)
 
         # Apply horizontal flip
-        if random.random() < 0.5:
-            flipped_bool = True
+        flipped_bool = random.random() < 0.5
+        if flipped_bool:
             image = TF.hflip(image) # Used functional.
 
         # Apply gaussian blur with probability 0.2
@@ -212,15 +209,15 @@ class BYOL(nn.Module):
 
         # Apply random resized crop
         rand_res_crop = T.RandomResizedCrop((self.image_size, self.image_size))
-        crop_coordinates = top, left, height, width = rand_res_crop.get_params(image, rand_res_crop.scale, rand_res_crop.ratio)
+        top, left, height, width = rand_res_crop.get_params(image, rand_res_crop.scale, rand_res_crop.ratio)
         # if size is int (not list) smaller edge will be scaled to match this.
         image = TF.resized_crop(image, top, left, height, width, size=(self.image_size, self. image_size))
 
-        # Normalize the image
+        # Normalize the image (image has to be a tensor at this point, transforms before this can work on PIL images.)
         norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
         # TODO make sure image is dtype=torch.float32
         image = norm(image)
-        return image, flipped_bool, crop_coordinates
+        return image, flipped_bool, (top, left, height, width)
 
     @singleton('target_encoder')
     def _get_target_encoder(self):
@@ -255,7 +252,7 @@ class BYOL(nn.Module):
         scene_two, flipped_bool_two, crop_coordinates_two = self.transform_image(x)
 
         # Check if the scenes overlap, if not augment them again (Do not increment current_iteration).
-        # check_scene_overlap()
+        overlap_coord = get_scene_overlap(flipped_bool_one, crop_coordinates_one, flipped_bool_two, crop_coordinates_two, x.shape)
         # ThenCheck if the scenes contain K objects, if not augment them again.
         # check_K_common_objects()
 
