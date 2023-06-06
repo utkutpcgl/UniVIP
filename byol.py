@@ -2,17 +2,14 @@
 https://github.com/lucidrains/byol-pytorch/blob/master/byol_pytorch/byol_pytorch.py 
 and modified accordingly."""
 import copy
-import random
 from functools import wraps
 
 import torch
 from torch import nn
 import torch.nn.functional as F
 
-from torchvision import transforms as T
-import torchvision.transforms.functional as TF
+from dataset.dataset import select_scenes, get_scene_overlap
 
-from dataset.dataset import FILTERED_64_PROPOSALS, FILTERED_96_PROPOSALS, get_scene_overlap
 
 # helper functions
 
@@ -46,18 +43,6 @@ def loss_fn(x, y):
     x = F.normalize(x, dim=-1, p=2)
     y = F.normalize(y, dim=-1, p=2)
     return 2 - 2 * (x * y).sum(dim=-1)
-
-# augmentation utils
-
-class RandomApply(nn.Module):
-    def __init__(self, fn, p):
-        super().__init__()
-        self.fn = fn
-        self.p = p
-    def forward(self, x):
-        if random.random() > self.p:
-            return x
-        return self.fn(x)
 
 
 # exponential moving average
@@ -160,7 +145,7 @@ class BYOL(nn.Module):
     def __init__(
         self,
         net,
-        image_size,
+        image_size = 224, # default byol
         hidden_layer = -2,
         projection_size = 256,
         projection_hidden_size = 4096,
@@ -186,38 +171,6 @@ class BYOL(nn.Module):
         # send a mock image tensor to instantiate singleton parameters
         self.forward(torch.randn(2, 3, image_size, image_size, device=device))
     
-    def transform_image(self, image):
-        # TODO needs pil image as input?
-        # since the order has to change (with randperm i get_params) I must use ColorJitter below.
-        if random.random() < 0.3:
-            col_jit = T.ColorJitter(0.8, 0.8, 0.8, 0.2)
-            image = col_jit(image)
-
-        # Apply grayscale with probability 0.2
-        gray_scale = T.RandomGrayscale(p=0.2)
-        image = gray_scale(image)
-
-        # Apply horizontal flip
-        flipped_bool = random.random() < 0.5
-        if flipped_bool:
-            image = TF.hflip(image) # Used functional.
-
-        # Apply gaussian blur with probability 0.2
-        if random.random() < 0.2:
-            gaus_blur = T.GaussianBlur((3, 3), (1.0, 2.0))
-            image = gaus_blur(image)
-
-        # Apply random resized crop
-        rand_res_crop = T.RandomResizedCrop((self.image_size, self.image_size))
-        top, left, height, width = rand_res_crop.get_params(image, rand_res_crop.scale, rand_res_crop.ratio)
-        # if size is int (not list) smaller edge will be scaled to match this.
-        image = TF.resized_crop(image, top, left, height, width, size=(self.image_size, self. image_size))
-
-        # Normalize the image (image has to be a tensor at this point, transforms before this can work on PIL images.)
-        norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
-        # TODO make sure image is dtype=torch.float32
-        image = norm(image)
-        return image, flipped_bool, (top, left, height, width)
 
     @singleton('target_encoder')
     def _get_target_encoder(self):
@@ -245,16 +198,8 @@ class BYOL(nn.Module):
         if return_embedding:
             return self.online_encoder(x, return_projection = return_projection)
         
-        # Get the proposals for image1 and image2.
-        
-        # I need the information which regions of the images were cropped and if RandomHorizontalFlip was applied (the region will change accordingly.)
-        scene_one, flipped_bool_one, crop_coordinates_one  = self.transform_image(x)
-        scene_two, flipped_bool_two, crop_coordinates_two = self.transform_image(x)
-
-        # Check if the scenes overlap, if not augment them again (Do not increment current_iteration).
-        overlap_coord = get_scene_overlap(flipped_bool_one, crop_coordinates_one, flipped_bool_two, crop_coordinates_two, x.shape)
-        # ThenCheck if the scenes contain K objects, if not augment them again.
-        # check_K_common_objects()
+        # Get the scenes and box_proposals (overlapping_boxes) for image1 and image2.
+        scene_one, scene_two, overlapping_boxes = select_scenes(x, img_path, self.image_size)
 
         online_proj_one, _ = self.online_encoder(scene_one)
         online_proj_two, _ = self.online_encoder(scene_two)
