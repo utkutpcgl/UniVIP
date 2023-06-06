@@ -8,7 +8,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from dataset.dataset import select_scenes, get_scene_overlap
+from dataset.dataset import select_scenes, get_concatenated_instances
 
 
 # helper functions
@@ -188,18 +188,23 @@ class BYOL(nn.Module):
 
     def forward(
         self,
-        x,
+        img,
         img_path,
         return_embedding = False,
         return_projection = True
     ):
-        assert not (self.training and x.shape[0] == 1), 'you must have greater than 1 sample when training, due to the batchnorm in the projection layer'
+        assert not (self.training and img.shape[0] == 1), 'you must have greater than 1 sample when training, due to the batchnorm in the projection layer'
 
         if return_embedding:
-            return self.online_encoder(x, return_projection = return_projection)
+            return self.online_encoder(img, return_projection = return_projection)
         
         # Get the scenes and box_proposals (overlapping_boxes) for image1 and image2.
-        scene_one, scene_two, overlapping_boxes = select_scenes(x, img_path, self.image_size)
+        scene_one, scene_two, overlapping_boxes = select_scenes(img, img_path, self.image_size)
+
+        # Get the crops from the image, resize them to 96, feed to online network, and concatenate them
+        # Resize and feed instances in overlapping boxes to the online encoder
+        instances = get_concatenated_instances(img, overlapping_boxes)
+        online_instance_proj, _ = self.online_encoder(instances)
 
         online_proj_one, _ = self.online_encoder(scene_one)
         online_proj_two, _ = self.online_encoder(scene_two)

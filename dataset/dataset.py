@@ -116,26 +116,25 @@ def get_scene_overlap(crop_coordinates_one, crop_coordinates_two, fallback=False
 
     return None if (x2 - x1 < min_size or y2 - y1 < min_size) else (x1, y1, x2, y2)
 
-    
-def check_box_in_region(box, overlap_region):
-    """Check if box is inside the region fully."""
-    x1, y1, x2, y2 = box
+
+def check_box_in_region(boxes, overlap_region):
+    """Check if boxes are inside the region fully."""
     r_x1, r_y1, r_x2, r_y2 = overlap_region
-    return x1 >= r_x1 and y1 >= r_y1 and x2 <= r_x2 and y2 <= r_y2
+    return (boxes[:, 0] >= r_x1) & (boxes[:, 1] >= r_y1) & (boxes[:, 2] <= r_x2) & (boxes[:, 3] <= r_y2)
+
 
 def get_overlapping_boxes(img_path, overlap_region, fallback):
     """ Get the proposed boxes in the overlapping region."""
     all_proposals = DEFAULT_FILTERED_PROPOSALS if not fallback else FALLBACK_FILTERED_PROPOSALS
     proposal_boxes_for_image = all_proposals[img_path]
-    overlapping_boxes = []
-    for box in proposal_boxes_for_image:
-        # TODO check if box is inside the overlap region, if yes increment count.
-        if check_box_in_region(box, overlap_region=overlap_region):
-            overlapping_boxes.append(box)
+    inside_region_mask = check_box_in_region(proposal_boxes_for_image, overlap_region=overlap_region)
+    overlapping_boxes = proposal_boxes_for_image[inside_region_mask]
     return overlapping_boxes
 
 # 2. If they have at least K object regions in the overlapping region T return the scenes s1 and s2 (they are our targets)
 def select_scenes(img, img_path, image_size, K=4, iters=20):
+    # TODO test this with trial pkl.
+    # NOTE we get only K boxes and ablations show there is no improvement after 4!!
     """Returns scenes with at least K common targets in the overlapping regions."""
     while True:
         # I need the information which regions of the images were cropped and if RandomHorizontalFlip was applied (the region will change accordingly.)
@@ -147,8 +146,19 @@ def select_scenes(img, img_path, image_size, K=4, iters=20):
             continue
         # now check K common instances.
         overlapping_boxes = get_overlapping_boxes(img_path, overlap_coord, fallback)
-        if len(overlapping_boxes) == K:
-            return scene_one, scene_two, overlapping_boxes
+        if len(overlapping_boxes) >= K:
+            return scene_one, scene_two, overlapping_boxes[:K] # Get only first K boxes.
         iters -= 1
+    
+def get_concatenated_instances(img, overlapping_boxes):
+    # Resize and feed instances in overlapping boxes to the online encoder
+    instances = []
+    for box in overlapping_boxes:
+        x1, x2, y1, y2 = box
+        instance = img[:, :, y1:y2, x1:x2] # crop instance from image tensor
+        instance = F.interpolate(instance, size=(96, 96)) # resize instance to 96x96
+        instances.append(instance)
+    return torch.stack(instances)
 
 # Calculate each loss based on the method (Lscene -> BYOL, Ls-i, Li-i)
+
