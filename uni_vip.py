@@ -8,7 +8,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from dataset.dataset import select_scenes, get_concatenated_instances
+from dataset.dataset import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES
 
 
 # helper functions
@@ -40,9 +40,12 @@ def set_requires_grad(model, val):
 # loss fn
 
 def loss_fn(x, y):
-    x = F.normalize(x, dim=-1, p=2)
+    """Cosine similarity is (proportional (/2)) to MSE when x-y are l2 normalized
+    https://stats.stackexchange.com/questions/146221/is-cosine-similarity-identical-to-l2-normalized-euclidean-distance"""
+    # L2 normalization (Divided L2 norm), hence, resulting l2_norm = 1 --> MSE = cosine_sim 
+    x = F.normalize(x, dim=-1, p=2) # 
     y = F.normalize(y, dim=-1, p=2)
-    return 2 - 2 * (x * y).sum(dim=-1)
+    return (2 - 2 * (x * y).sum(dim=-1)).mean()
 
 
 # exponential moving average
@@ -150,12 +153,12 @@ class BYOL(nn.Module):
         projection_size = 256,
         projection_hidden_size = 4096,
         moving_average_decay = 0.99,
+        K=K_COMMON_INSTANCES, # Number of instances in the ovrelap.
     ):
         super().__init__()
         self.net = net
-
-        # default SimCLR augmentation
         self.image_size = image_size
+        self.K = K
 
         self.online_encoder = NetWrapper(net, projection_size, projection_hidden_size, layer=hidden_layer)
 
@@ -163,6 +166,8 @@ class BYOL(nn.Module):
         self.target_ema_updater = EMA(moving_average_decay)
 
         self.online_predictor = MLP(projection_size, projection_size, projection_hidden_size)
+
+        self.instances_to_scene_linear = nn.Linear(projection_size*K, projection_size)
 
         # get device of network and make wrapper same device
         device = get_module_device(net)
@@ -201,28 +206,39 @@ class BYOL(nn.Module):
         # Get the scenes and box_proposals (overlapping_boxes) for image1 and image2.
         scene_one, scene_two, overlapping_boxes = select_scenes(img, img_path, self.image_size)
 
-        # Get the crops from the image, resize them to 96, feed to online network, and concatenate them
-        # Resize and feed instances in overlapping boxes to the online encoder
-        instances = get_concatenated_instances(img, overlapping_boxes)
-        online_instance_proj, _ = self.online_encoder(instances)
-
         online_proj_one, _ = self.online_encoder(scene_one)
         online_proj_two, _ = self.online_encoder(scene_two)
-
         online_pred_one = self.online_predictor(online_proj_one)
         online_pred_two = self.online_predictor(online_proj_two)
 
+        # Get the crops from the image, resize them to 96, feed to online network, and concatenate them
+        # Resize and feed instances in overlapping boxes to the online encoder
+        concatenated_instances_instances = get_concatenated_instances(img, overlapping_boxes)
+        online_proj_instance, _ = self.online_encoder(concatenated_instances_instances)
+        online_pred_instance = self.online_predictor(online_proj_instance)
+
         with torch.no_grad():
             target_encoder = self._get_target_encoder()
-            # TODO here you have to pass instances and scenes trough the encoder and define the loss accordingly.
-            # Pass image one and two
-            target_proj_one, _ = target_encoder(image_one)
-            target_proj_two, _ = target_encoder(image_two)
+            # Pass scene one and two
+            target_proj_one, _ = target_encoder(scene_one)
+            target_proj_two, _ = target_encoder(scene_two)
             target_proj_one.detach_()
             target_proj_two.detach_()
+            # Pass instances in the overlapping region
+            target_proj_instance, _ = target_encoder(concatenated_instances_instances)
+            target_proj_instance.detach_()
 
-        loss_one = loss_fn(online_pred_one, target_proj_two.detach())
-        loss_two = loss_fn(online_pred_two, target_proj_one.detach())
+        # Scene to scene loss
+        loss_ss_one = loss_fn(online_pred_one, target_proj_two.detach())
+        loss_ss_two = loss_fn(online_pred_two, target_proj_one.detach())
+        loss_ss = loss_ss_one + loss_ss_two
 
-        loss = loss_one + loss_two
-        return loss.mean()
+        # Scene to instance loss
+        loss_si_one = loss_fn(online_pred_instance, target_proj_one.detach())
+        loss_si_two = loss_fn(online_pred_instance, target_proj_two.detach())
+        loss_si = loss_si_one + loss_si_two
+
+        # instance to instance loss (optimal transport and sinkhorn-knopp)
+        loss_ii = 0
+
+        return loss_ss + loss_si + loss_ii

@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torchvision import transforms as T
 import torchvision.transforms.functional as TF
 import random
@@ -13,6 +14,7 @@ DEFAULT_FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO/image_info_unlabeled
 FALLBACK_FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO/image_info_unlabeled2017/annotations/image_info_unlabeled2017.json'
 DEFAULT_FILTER_SIZE = 96
 FALLBACK_FILTER_SIZE = 64
+K_COMMON_INSTANCES = 4
 
 if not DEBUG:
     ic.disable()
@@ -131,11 +133,11 @@ def get_overlapping_boxes(img_path, overlap_region, fallback):
     overlapping_boxes = proposal_boxes_for_image[inside_region_mask]
     return overlapping_boxes
 
-# 2. If they have at least K object regions in the overlapping region T return the scenes s1 and s2 (they are our targets)
-def select_scenes(img, img_path, image_size, K=4, iters=20):
+# 2. If they have at least K_common_instances object regions in the overlapping region T return the scenes s1 and s2 (they are our targets)
+def select_scenes(img, img_path, image_size, K_common_instances=K_COMMON_INSTANCES, iters=20):
     # TODO test this with trial pkl.
-    # NOTE we get only K boxes and ablations show there is no improvement after 4!!
-    """Returns scenes with at least K common targets in the overlapping regions."""
+    # NOTE we get only K_common_instances boxes and ablations show there is no improvement after 4!!
+    """Returns scenes with at least K_common_instances common targets in the overlapping regions."""
     while True:
         # I need the information which regions of the images were cropped and if RandomHorizontalFlip was applied (the region will change accordingly.)
         fallback = iters <= 0 # Use smaller box filter after some iterations.
@@ -144,10 +146,10 @@ def select_scenes(img, img_path, image_size, K=4, iters=20):
         overlap_coord = get_scene_overlap(crop_coordinates_one, crop_coordinates_two, fallback)
         if overlap_coord is None: # Check there is a large enough overlap
             continue
-        # now check K common instances.
+        # now check K_common_instances common instances.
         overlapping_boxes = get_overlapping_boxes(img_path, overlap_coord, fallback)
-        if len(overlapping_boxes) >= K:
-            return scene_one, scene_two, overlapping_boxes[:K] # Get only first K boxes.
+        if len(overlapping_boxes) >= K_common_instances:
+            return scene_one, scene_two, overlapping_boxes[:K_common_instances] # Get only first K_common_instances boxes.
         iters -= 1
     
 def get_concatenated_instances(img, overlapping_boxes):
