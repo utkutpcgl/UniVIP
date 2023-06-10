@@ -152,15 +152,16 @@ def select_scenes(img, img_path, image_size, K_common_instances=K_COMMON_INSTANC
             return scene_one, scene_two, overlapping_boxes[:K_common_instances] # Get only first K_common_instances boxes.
         iters -= 1
     
-def get_concatenated_instances(img, overlapping_boxes):
+def get_concatenated_instances(img, overlapping_boxes, instance_dim):
     # Resize and feed instances in overlapping boxes to the online encoder
+    # When there is a batch dimension the instance_dim should be 1
     instances = []
     for box in overlapping_boxes:
         x1, x2, y1, y2 = box
-        instance = img[:, :, y1:y2, x1:x2] # crop instance from image tensor
-        instance = F.interpolate(instance, size=(96, 96)) # resize instance to 96x96
+        instance = img[..., y1:y2, x1:x2] # crop instance from image tensor
+        instance = F.interpolate(instance, size=(96, 96), mode="bicubic") # resize instance to 96x96
         instances.append(instance)
-    return torch.stack(instances)
+    return torch.stack(instances, dim=instance_dim) # vertical stack.
 
 # Calculate each loss based on the method (Lscene -> BYOL, Ls-i, Li-i)
 

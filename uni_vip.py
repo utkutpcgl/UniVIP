@@ -3,13 +3,12 @@ https://github.com/lucidrains/byol-pytorch/blob/master/byol_pytorch/byol_pytorch
 and modified accordingly."""
 import copy
 from functools import wraps
-
 import torch
 from torch import nn
 import torch.nn.functional as F
 
-from dataset.dataset import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES
-
+from transforms import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES
+from sink_knop_dist import SinkhornDistance
 
 # helper functions
 
@@ -153,21 +152,22 @@ class BYOL(nn.Module):
         projection_size = 256,
         projection_hidden_size = 4096,
         moving_average_decay = 0.99,
-        K=K_COMMON_INSTANCES, # Number of instances in the ovrelap.
+        K_common_instances=K_COMMON_INSTANCES, # Number of instances in the ovrelap.
     ):
         super().__init__()
         self.net = net
         self.image_size = image_size
-        self.K = K
 
         self.online_encoder = NetWrapper(net, projection_size, projection_hidden_size, layer=hidden_layer)
+        self.online_predictor = MLP(projection_size, projection_size, projection_hidden_size)
 
         self.target_encoder = None
         self.target_ema_updater = EMA(moving_average_decay)
 
-        self.online_predictor = MLP(projection_size, projection_size, projection_hidden_size)
-
-        self.instances_to_scene_linear = nn.Linear(projection_size*K, projection_size)
+        # UniVIP specific layers
+        self.K_common_instances = K_common_instances
+        self.instances_to_scene_linear = nn.Linear(projection_size*K_common_instances, projection_size) # K concatenated
+        self.sinkhorn_distance = SinkhornDistance()
 
         # get device of network and make wrapper same device
         device = get_module_device(net)
@@ -191,6 +191,26 @@ class BYOL(nn.Module):
         assert self.target_encoder is not None, 'target encoder has not been created yet'
         update_moving_average(self.target_ema_updater, self.target_encoder, self.online_encoder)
 
+    def ii_loss_fn(self, online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg):
+        """(target_proj_one+target_proj_two)/2, (online_pred_one+online_pred_two)/2
+        return optimal_plan_matrix"""
+        # instance to instance loss (optimal transport and sinkhorn-knopp)
+        # Step 1: Compute dot_product_matrix
+        O_matrix = online_pred_instance # (instance numbers K) x (number of features)
+        T_matrix = target_proj_instance # (instance numbers K) x (number of features)
+        dot_product_matrix = torch.mm(O_matrix.t(), T_matrix)
+        # Step 2: Compute Norm matrices
+        norm_matrix_O = torch.norm(O_matrix, dim=0, keepdim=True)
+        norm_matrix_T = torch.norm(T_matrix, dim=0, keepdim=True)
+        # Step 3: Compute C
+        ot_cosine_similarity_matrix = (dot_product_matrix / (norm_matrix_O.t() * norm_matrix_T))
+        cost_matrix = 1 - ot_cosine_similarity_matrix
+        a_vector = torch.max(T_matrix.t*online_pred_avg,0)
+        b_vector = torch.max(O_matrix.t*target_proj_avg,0)
+        _, optimal_plan_matrix = self.sinkhorn_distance(a_vector,b_vector,cost_matrix)
+        loss_ii = torch.sum(-torch.mul(optimal_plan_matrix*ot_cosine_similarity_matrix), dim=(-2,-1)) # Forces similar instance representations to be close to each other.
+        return loss_ii
+
     def forward(
         self,
         img,
@@ -213,9 +233,18 @@ class BYOL(nn.Module):
 
         # Get the crops from the image, resize them to 96, feed to online network, and concatenate them
         # Resize and feed instances in overlapping boxes to the online encoder
-        concatenated_instances_instances = get_concatenated_instances(img, overlapping_boxes)
-        online_proj_instance, _ = self.online_encoder(concatenated_instances_instances)
+        instance_dim = 1 if img.ndim==4 else 0 # Choose the instance dimension 
+        concatenated_instances = get_concatenated_instances(img, overlapping_boxes, instance_dim=instance_dim)
+        concatenated_instances_squeezed = concatenated_instances.reshape(-1,*concatenated_instances.size()[-3:]) # Squeeze along batch dim
+
+
+        online_proj_instance, _ = self.online_encoder(concatenated_instances_squeezed)
         online_pred_instance = self.online_predictor(online_proj_instance)
+        # reshape the squezed predictions and concatenate them TODO
+        # restore the batch dimension if it was available
+        online_pred_instance = online_pred_instance if instance_dim==0 else online_pred_instance.reshape(img.shape[0], self.K_common_instances, online_pred_instance.shape[-1])
+        online_concatenated_instance_perdictions = torch.concat(online_pred_instance, dim=instance_dim)
+        online_concatenated_final_instance_representations = self.instances_to_scene_linear(online_concatenated_instance_perdictions)
 
         with torch.no_grad():
             target_encoder = self._get_target_encoder()
@@ -224,9 +253,11 @@ class BYOL(nn.Module):
             target_proj_two, _ = target_encoder(scene_two)
             target_proj_one.detach_()
             target_proj_two.detach_()
+
             # Pass instances in the overlapping region
-            target_proj_instance, _ = target_encoder(concatenated_instances_instances)
+            target_proj_instance, _ = target_encoder(concatenated_instances_squeezed)
             target_proj_instance.detach_()
+            target_proj_instance = target_proj_instance if instance_dim==0 else target_proj_instance.reshape(img.shape[0], self.K_common_instances, target_proj_instance.shape[-1])
 
         # Scene to scene loss
         loss_ss_one = loss_fn(online_pred_one, target_proj_two.detach())
@@ -234,11 +265,15 @@ class BYOL(nn.Module):
         loss_ss = loss_ss_one + loss_ss_two
 
         # Scene to instance loss
-        loss_si_one = loss_fn(online_pred_instance, target_proj_one.detach())
-        loss_si_two = loss_fn(online_pred_instance, target_proj_two.detach())
+        loss_si_one = loss_fn(online_concatenated_final_instance_representations, target_proj_one.detach())
+        loss_si_two = loss_fn(online_concatenated_final_instance_representations, target_proj_two.detach())
         loss_si = loss_si_one + loss_si_two
 
         # instance to instance loss (optimal transport and sinkhorn-knopp)
-        loss_ii = 0
+        online_pred_avg = (online_pred_one+online_pred_two)/2
+        target_proj_avg = (target_proj_one+target_proj_two)/2
+        # TODO check this loss twice.
+        optimal_plan_matrix, ot_cosine_similarity_matrix = self.ii_loss_fn(online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg)
+        loss_ii = torch.sum(-torch.mul(optimal_plan_matrix*ot_cosine_similarity_matrix), dim=(-2,-1)) # Forces similar instance representations to be close to each other.
 
         return loss_ss + loss_si + loss_ii
