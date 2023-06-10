@@ -273,7 +273,6 @@ class BYOL(nn.Module):
         online_pred_avg = (online_pred_one+online_pred_two)/2
         target_proj_avg = (target_proj_one+target_proj_two)/2
         # TODO check this loss twice.
-        optimal_plan_matrix, ot_cosine_similarity_matrix = self.ii_loss_fn(online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg)
-        loss_ii = torch.sum(-torch.mul(optimal_plan_matrix*ot_cosine_similarity_matrix), dim=(-2,-1)) # Forces similar instance representations to be close to each other.
+        loss_ii = self.ii_loss_fn(online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg)
 
         return loss_ss + loss_si + loss_ii
