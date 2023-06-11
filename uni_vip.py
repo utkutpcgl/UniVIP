@@ -7,7 +7,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from transforms import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES
+from transforms import select_scenes, common_augmentations, get_concatenated_instances, K_COMMON_INSTANCES
 from sink_knop_dist import SinkhornDistance
 
 # helper functions
@@ -223,29 +223,11 @@ class BYOL(nn.Module):
         if return_embedding:
             return self.online_encoder(img, return_projection = return_projection)
         
+        # FEED THE SCENES
         # Get the scenes and box_proposals (overlapping_boxes) for image1 and image2.
         scene_one, scene_two, overlapping_boxes = select_scenes(img, img_path, self.image_size)
-
-        online_proj_one, _ = self.online_encoder(scene_one)
-        online_proj_two, _ = self.online_encoder(scene_two)
-        online_pred_one = self.online_predictor(online_proj_one)
-        online_pred_two = self.online_predictor(online_proj_two)
-
-        # Get the crops from the image, resize them to 96, feed to online network, and concatenate them
-        # Resize and feed instances in overlapping boxes to the online encoder
-        instance_dim = 1 if img.ndim==4 else 0 # Choose the instance dimension 
-        concatenated_instances = get_concatenated_instances(img, overlapping_boxes, instance_dim=instance_dim)
-        concatenated_instances_squeezed = concatenated_instances.reshape(-1,*concatenated_instances.size()[-3:]) # Squeeze along batch dim
-
-
-        online_proj_instance, _ = self.online_encoder(concatenated_instances_squeezed)
-        online_pred_instance = self.online_predictor(online_proj_instance)
-        # reshape the squezed predictions and concatenate them TODO
-        # restore the batch dimension if it was available
-        online_pred_instance = online_pred_instance if instance_dim==0 else online_pred_instance.reshape(img.shape[0], self.K_common_instances, online_pred_instance.shape[-1])
-        online_concatenated_instance_perdictions = torch.concat(online_pred_instance, dim=instance_dim)
-        online_concatenated_final_instance_representations = self.instances_to_scene_linear(online_concatenated_instance_perdictions)
-
+        scene_one = common_augmentations(scene_one,type_two=False)
+        scene_two = common_augmentations(scene_two,type_two=True)
         with torch.no_grad():
             target_encoder = self._get_target_encoder()
             # Pass scene one and two
@@ -253,22 +235,41 @@ class BYOL(nn.Module):
             target_proj_two, _ = target_encoder(scene_two)
             target_proj_one.detach_()
             target_proj_two.detach_()
+        online_proj_one, _ = self.online_encoder(scene_one)
+        online_proj_two, _ = self.online_encoder(scene_two)
+        online_pred_one = self.online_predictor(online_proj_one)
+        online_pred_two = self.online_predictor(online_proj_two)
 
+
+        # FEED THE INSTANCES
+        # Get the crops from the image, resize them to 96, feed to online network, and concatenate them
+        # Resize and feed instances in overlapping boxes to the online encoder
+        instance_dim = 1 if img.ndim==4 else 0 # Choose the instance dimension 
+        concatenated_instances = get_concatenated_instances(img, overlapping_boxes, instance_dim=instance_dim)
+        concatenated_instances_squeezed = concatenated_instances.reshape(-1,*concatenated_instances.size()[-3:]) # Squeeze along batch dim
+        concatenated_instances_squeezed = common_augmentations(concatenated_instances_squeezed,type_two=False)
+        online_proj_instance, _ = self.online_encoder(concatenated_instances_squeezed)
+        online_pred_instance = self.online_predictor(online_proj_instance)
+        # restore the batch dimension if it was available
+        online_pred_instance = online_pred_instance if instance_dim==0 else online_pred_instance.reshape(img.shape[0], self.K_common_instances, online_pred_instance.shape[-1])
+        online_pred_concatenated_instance = torch.concat(online_pred_instance, dim=instance_dim)
+        online_concatenated_final_instance_representations = self.instances_to_scene_linear(online_pred_concatenated_instance)
+        with torch.no_grad():
             # Pass instances in the overlapping region
             target_proj_instance, _ = target_encoder(concatenated_instances_squeezed)
             target_proj_instance.detach_()
             target_proj_instance = target_proj_instance if instance_dim==0 else target_proj_instance.reshape(img.shape[0], self.K_common_instances, target_proj_instance.shape[-1])
+        
 
+        # CALCULATE LOSSES
         # Scene to scene loss
         loss_ss_one = loss_fn(online_pred_one, target_proj_two.detach())
         loss_ss_two = loss_fn(online_pred_two, target_proj_one.detach())
         loss_ss = loss_ss_one + loss_ss_two
-
         # Scene to instance loss
         loss_si_one = loss_fn(online_concatenated_final_instance_representations, target_proj_one.detach())
         loss_si_two = loss_fn(online_concatenated_final_instance_representations, target_proj_two.detach())
         loss_si = loss_si_one + loss_si_two
-
         # instance to instance loss (optimal transport and sinkhorn-knopp)
         online_pred_avg = (online_pred_one+online_pred_two)/2
         target_proj_avg = (target_proj_one+target_proj_two)/2

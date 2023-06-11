@@ -8,12 +8,11 @@ import torch.nn.functional as F
 from torchvision import transforms as T
 import torchvision.transforms.functional as TF
 import random
+from naive_box_generation import add_n_random_boxes
 
 DEBUG = True
-DEFAULT_FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO/image_info_unlabeled2017/annotations/image_info_unlabeled2017.json'
-FALLBACK_FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO/image_info_unlabeled2017/annotations/image_info_unlabeled2017.json'
-DEFAULT_FILTER_SIZE = 96
-FALLBACK_FILTER_SIZE = 64
+FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO/image_info_unlabeled2017/annotations/image_info_unlabeled2017.json'
+FILTER_SIZE = 64
 K_COMMON_INSTANCES = 4
 
 if not DEBUG:
@@ -35,8 +34,7 @@ def load_pkl(pkl_file):
         raw_data = pickle.load(f)
     return raw_data
 # Load the filtered box proposal pkl files, convert to faster readable form (tensors?)
-DEFAULT_FILTERED_PROPOSALS = load_pkl(pkl_file=DEFAULT_FILTERED_PKL)
-FALLBACK_FILTERED_PROPOSALS = load_pkl(pkl_file=FALLBACK_FILTERED_PKL)
+FILTERED_PROPOSALS = load_pkl(pkl_file=FILTERED_PKL)
 # How do I construct the dataloader and set the batch (size)?
 
 def tlhw_to_xyxy(t, l, h, w):
@@ -56,50 +54,83 @@ class RandomApply(nn.Module):
     def forward(self, x):
         return x if random.random() > self.p else self.fn(x)
 
-def transform_image(image, image_size, type_two = False):
-        # The git author missed different augmentations: https://github.com/lucidrains/byol-pytorch/issues/31#issuecomment-707925576
-        # Apply random resized crop
-        rand_res_crop = T.RandomResizedCrop((image_size, image_size))
-        top, left, height, width = rand_res_crop.get_params(image, rand_res_crop.scale, rand_res_crop.ratio)
-        # if size is int (not list) smaller edge will be scaled to match this.
-        # byol uses bicubic interpolation.
-        image = TF.resized_crop(image, top, left, height, width, size=(image_size,  image_size), interpolation="bicubic")
+def crop_scene(image, image_size):
+    # The git author missed different augmentations: https://github.com/lucidrains/byol-pytorch/issues/31#issuecomment-707925576
+    # Apply random resized crop
+    rand_res_crop = T.RandomResizedCrop((image_size, image_size))
+    top, left, height, width = rand_res_crop.get_params(image, rand_res_crop.scale, rand_res_crop.ratio)
+    # if size is int (not list) smaller edge will be scaled to match this.
+    # byol uses bicubic interpolation.
+    image = TF.resized_crop(image, top, left, height, width, size=(image_size,  image_size), interpolation="bicubic")
+    return image, (top, left, height, width)
 
-        # Apply horizontal flip (TODO might not need), T.RandomHorizontalFlip()
-        flipped_bool = random.random() < 0.5
-        if flipped_bool:
-            image = TF.hflip(image) # Used functional.
+def common_augmentations(image, type_two = False):
+    rand_hor_flip = T.RandomHorizontalFlip(p=0.5)
+    image = rand_hor_flip(image)
 
-        # TODO needs pil image as input?
-        # since the order has to change (with randperm i get_params) I must use ColorJitter below.
-        col_jit = RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)
-        image = col_jit(image)
+    # TODO needs pil image as input?
+    # since the order has to change (with randperm i get_params) I must use ColorJitter below.
+    col_jit = RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)
+    image = col_jit(image)
 
-        # Apply grayscale with probability 0.2
-        gray_scale = T.RandomGrayscale(p=0.2)
-        image = gray_scale(image)
-
-
-        # Apply gaussian blur with probability 0.2
-        gaussian_prob = 0.1 if type_two else 1 # 1 for type_one
-        gaus_blur = RandomApply(T.GaussianBlur((23, 23)), p = gaussian_prob)
-        image = gaus_blur(image)
-
-        # TODO add solarization as UniVIP applied it (like BYOL)
-
-        # TODO do I have to call to tensor here in any case?
-
-        # They apply normalization (not explicit in the paper: https://github.com/lucidrains/byol-pytorch/issues/4#issue-641183816)
-        # Normalize the image (image has to be a tensor at this point, transforms before this can work on PIL images.)
-        norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
-        # TODO make sure image is dtype=torch.float32
-        image = norm(image)
-        return image, flipped_bool, (top, left, height, width)
+    # Apply grayscale with probability 0.2
+    gray_scale = T.RandomGrayscale(p=0.2)
+    image = gray_scale(image)
 
 
-# 1. Get scene overlaps given the coordinates
-def get_scene_overlap(crop_coordinates_one, crop_coordinates_two, fallback=False):
-    min_size = DEFAULT_FILTER_SIZE if not fallback else FALLBACK_FILTER_SIZE # filter smaller boxes if fallback.
+    # Apply gaussian blur with probability 0.2
+    gaussian_prob = 0.1 if type_two else 1 # 1 for type_one
+    gaus_blur = RandomApply(T.GaussianBlur((23, 23)), p = gaussian_prob)
+    image = gaus_blur(image)
+
+    # TODO add solarization as UniVIP applied it (like BYOL)
+
+    # TODO do I have to call to tensor here in any case?
+
+    # They apply normalization (not explicit in the paper: https://github.com/lucidrains/byol-pytorch/issues/4#issue-641183816)
+    # Normalize the image (image has to be a tensor at this point, transforms before this can work on PIL images.)
+    norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
+    # TODO make sure image is dtype=torch.float32
+    image = norm(image)
+    return image
+
+def transform_instance(image, type_two = False):
+    # Apply horizontal flip (TODO might not need), T.RandomHorizontalFlip()
+    flipped_bool = random.random() < 0.5
+    if flipped_bool:
+        image = TF.hflip(image) # Used functional.
+
+    # TODO needs pil image as input?
+    # since the order has to change (with randperm i get_params) I must use ColorJitter below.
+    col_jit = RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)
+    image = col_jit(image)
+
+    # Apply grayscale with probability 0.2
+    gray_scale = T.RandomGrayscale(p=0.2)
+    image = gray_scale(image)
+
+
+    # Apply gaussian blur with probability 0.2
+    gaussian_prob = 0.1 if type_two else 1 # 1 for type_one
+    gaus_blur = RandomApply(T.GaussianBlur((23, 23)), p = gaussian_prob)
+    image = gaus_blur(image)
+
+    # TODO add solarization as UniVIP applied it (like BYOL)
+
+    # TODO do I have to call to tensor here in any case?
+
+    # They apply normalization (not explicit in the paper: https://github.com/lucidrains/byol-pytorch/issues/4#issue-641183816)
+    # Normalize the image (image has to be a tensor at this point, transforms before this can work on PIL images.)
+    norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
+    # TODO make sure image is dtype=torch.float32
+    image = norm(image)
+    return image
+    
+
+
+# 1. Get scene overlaps given the coordinates, TODO does not operate on tensors (should work on batches)
+def get_scene_overlap(crop_coordinates_one, crop_coordinates_two):
+    min_overlap_size = FILTER_SIZE*3/2 # filter scenes with too small overlap
     """crop_coordinates has (top, left, height, width)"""
     def get_overlap(coord_one, coord_two):
         x1_1, y1_1, x2_1, y2_1 = coord_one
@@ -116,7 +147,7 @@ def get_scene_overlap(crop_coordinates_one, crop_coordinates_two, fallback=False
 
     (x1, y1, x2, y2) = get_overlap(coord_one, coord_two)
 
-    return None if (x2 - x1 < min_size or y2 - y1 < min_size) else (x1, y1, x2, y2)
+    return None if (x2 - x1 < min_overlap_size or y2 - y1 < min_overlap_size) else (x1, y1, x2, y2)
 
 
 def check_box_in_region(boxes, overlap_region):
@@ -125,32 +156,41 @@ def check_box_in_region(boxes, overlap_region):
     return (boxes[:, 0] >= r_x1) & (boxes[:, 1] >= r_y1) & (boxes[:, 2] <= r_x2) & (boxes[:, 3] <= r_y2)
 
 
-def get_overlapping_boxes(img_path, overlap_region, fallback):
+def get_overlapping_boxes(img_path, overlap_region):
     """ Get the proposed boxes in the overlapping region."""
-    all_proposals = DEFAULT_FILTERED_PROPOSALS if not fallback else FALLBACK_FILTERED_PROPOSALS
+    all_proposals = FILTERED_PROPOSALS
     proposal_boxes_for_image = all_proposals[img_path]
     inside_region_mask = check_box_in_region(proposal_boxes_for_image, overlap_region=overlap_region)
     overlapping_boxes = proposal_boxes_for_image[inside_region_mask]
-    return overlapping_boxes
+    return overlapping_boxes if len(overlapping_boxes)!=0 else torch.zeros(0, 4, dtype=torch.int64)
+
 
 # 2. If they have at least K_common_instances object regions in the overlapping region T return the scenes s1 and s2 (they are our targets)
 def select_scenes(img, img_path, image_size, K_common_instances=K_COMMON_INSTANCES, iters=20):
     # TODO test this with trial pkl.
     # NOTE we get only K_common_instances boxes and ablations show there is no improvement after 4!!
     """Returns scenes with at least K_common_instances common targets in the overlapping regions."""
-    while True:
+    best_scenes={"overlapping_boxes":torch.zeros(0,4, dtype=torch.int64), "overlap_coord":None, "s1":None, "s2":None}
+    while iters > 0:
         # I need the information which regions of the images were cropped and if RandomHorizontalFlip was applied (the region will change accordingly.)
-        fallback = iters <= 0 # Use smaller box filter after some iterations.
-        scene_one, _, crop_coordinates_one  = transform_image(img, image_size, type_two=False)
-        scene_two, _, crop_coordinates_two = transform_image(img, image_size, type_two=True)
-        overlap_coord = get_scene_overlap(crop_coordinates_one, crop_coordinates_two, fallback)
+        scene_one, crop_coordinates_one  = crop_scene(img, image_size)
+        scene_two, crop_coordinates_two = crop_scene(img, image_size)
+        overlap_coord = get_scene_overlap(crop_coordinates_one, crop_coordinates_two)
         if overlap_coord is None: # Check there is a large enough overlap
             continue
         # now check K_common_instances common instances.
-        overlapping_boxes = get_overlapping_boxes(img_path, overlap_coord, fallback)
+        overlapping_boxes = get_overlapping_boxes(img_path, overlap_coord)
         if len(overlapping_boxes) >= K_common_instances:
             return scene_one, scene_two, overlapping_boxes[:K_common_instances] # Get only first K_common_instances boxes.
+        elif len(overlapping_boxes) > len(best_scenes["overlapping_boxes"]): # Update the best boxes for the fallback case.
+            best_scenes["overlapping_boxes"], best_scenes["overlap_coord"], best_scenes["s1"], best_scenes["s2"] = overlapping_boxes, overlap_coord, scene_one, scene_two
         iters -= 1
+    else:
+        # Add random boxes to the overlapping coordinates.
+        missing_box_num = K_common_instances-len(best_scenes["overlapping_boxes"])
+        best_scenes["overlapping_boxes"] = add_n_random_boxes(overlap_coord=best_scenes["overlap_coord"], overlapping_boxes=best_scenes["overlapping_boxes"], n_random_boxes=missing_box_num)
+        return scene_one, scene_two, overlapping_boxes[:K_common_instances] # Get only first K_common_instances boxes.
+
     
 def get_concatenated_instances(img, overlapping_boxes, instance_dim):
     # Resize and feed instances in overlapping boxes to the online encoder
