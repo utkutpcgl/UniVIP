@@ -36,3 +36,5 @@ At the end you will have pkl files with bounding box proposals (filtered for 64 
 
 
 - It creates scenes for every image (every batch new pairs), does a batch have a single image? That would be strange.
+
+- I had to change the OS mmap limitation x4 with `sudo sysctl -w vm.max_map_count=<new_value>` (`sudo sysctl -w vm.max_map_count=262120`)

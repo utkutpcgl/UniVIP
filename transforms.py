@@ -11,7 +11,7 @@ import random
 from naive_box_generation import add_n_random_boxes
 
 DEBUG = True
-FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO/image_info_unlabeled2017/annotations/image_info_unlabeled2017.json'
+FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/data_ops/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou_trial_250.pkl'
 FILTER_SIZE = 64
 K_COMMON_INSTANCES = 4
 
@@ -160,7 +160,7 @@ def select_scenes(img, img_path, image_size, K_common_instances=K_COMMON_INSTANC
         # Add random boxes to the overlapping coordinates.
         missing_box_num = K_common_instances-len(best_scenes["overlapping_boxes"])
         best_scenes["overlapping_boxes"] = add_n_random_boxes(overlap_coord=best_scenes["overlap_coord"], overlapping_boxes=best_scenes["overlapping_boxes"], n_random_boxes=missing_box_num)
-        return scene_one, scene_two, overlapping_boxes[:K_common_instances] # Get only first K_common_instances boxes.
+        return best_scenes["s1"], best_scenes["s2"], best_scenes["overlapping_boxes"][:K_common_instances] # Get only first K_common_instances boxes.
 
     
 def get_concatenated_instances(img, overlapping_boxes, instance_dim):
@@ -173,6 +173,3 @@ def get_concatenated_instances(img, overlapping_boxes, instance_dim):
         instance = F.interpolate(instance, size=(96, 96), mode="bicubic") # resize instance to 96x96
         instances.append(instance)
     return torch.stack(instances, dim=instance_dim) # vertical stack.
-
-# Calculate each loss based on the method (Lscene -> BYOL, Ls-i, Li-i)
-
