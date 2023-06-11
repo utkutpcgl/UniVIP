@@ -24,7 +24,7 @@ def get_max_iou(filtered_boxes: Tensor, candidate_box: Tensor) -> Tensor:
 
     # 4. calculate the overlaps and find the max overlap between filtered_boxes and candidate_box
     iou = inters / uni
-    return torch.max(iou)
+    return 0 if iou.numel() == 0 else torch.max(iou)
 
 def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio=3, iou_threshold=0.5, max_trials=30):
     """overlap_coord is (x1,y1,x2,y2)
@@ -47,10 +47,7 @@ def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio
         y1 = torch.randint(o_y1, o_y2 - height + 1, (1,)).item()
         # create the random box coordinates as a tensor.
         random_box = torch.tensor([x1, y1, width, height])
-        if len(overlapping_boxes) != 0:
-            iou = get_max_iou(filtered_boxes=overlapping_boxes, candidate_box=random_box)
-        else:
-            iou=0
+        iou = get_max_iou(filtered_boxes=overlapping_boxes, candidate_box=random_box)
         trial_count+=1
     return random_box
 

@@ -7,7 +7,6 @@ Minutes passed.
 49:48 for unlabelled dataset
 """
 
-import numpy as np
 import torch
 from torch import Tensor
 from tqdm import tqdm
@@ -17,9 +16,9 @@ import time
 from pathlib import Path
 from multiprocessing import Pool
 
-NUM_PROC = 80
+NUM_PROC = 1
 DEBUG = True
-TARGET_PKL = "/home/kuartis-dgx1/utku/UniVIP/COCO/unlabeled2017_selective_search_proposal_enumerated.pkl"
+TARGET_PKL = "/home/kuartis-dgx1/utku/UniVIP/COCO_proposals/final_proposals/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors.pkl"
 IOU_THRESH=0.5
 if not DEBUG:
     ic.disable()
@@ -42,7 +41,7 @@ def get_max_iou(filtered_boxes: Tensor, candidate_box: Tensor) -> Tensor:
     return :   the max iou score about filtered_boxes and candidate_box
     """
     # 1.get the coordinate of inters
-    ixmin = torch.max(filtered_boxes[:, 0], candidate_box[0])
+    ixmin = torch.max(filtered_boxes[:, 0], candidate_box[0]) # broadcasts the smaller argument.
     ixmax = torch.min(filtered_boxes[:, 0] + filtered_boxes[:, 2], candidate_box[0] + candidate_box[2])
     iymin = torch.max(filtered_boxes[:, 1], candidate_box[1])
     iymax = torch.min(filtered_boxes[:, 1] + filtered_boxes[:, 3], candidate_box[1] + candidate_box[3])
@@ -58,13 +57,14 @@ def get_max_iou(filtered_boxes: Tensor, candidate_box: Tensor) -> Tensor:
 
     # 4. calculate the overlaps and find the max overlap between filtered_boxes and candidate_box
     iou = inters / uni
-    return torch.max(iou)
+    return 0 if iou.numel() == 0 else torch.max(iou)
 
 
 def box_filter(candidate_boxes_tensor, max_iou_thr=None):
     """Since the order is important cannot apply async multiprocessing."""
     # NOTE I have to re-generate all candidate_boxes, called filtered_box_proposals.append(box) before max_iou_thr: 
-    assert candidate_boxes_tensor.numel!=0 # number of elements
+    assert candidate_boxes_tensor.numel()!=0 # number of elements
+    print(candidate_boxes_tensor.shape)
     filtered_candidate_boxes_tensor = torch.ones(0,4)
     for box in candidate_boxes_tensor:
         # Calculate width and height of the box
@@ -72,6 +72,8 @@ def box_filter(candidate_boxes_tensor, max_iou_thr=None):
         if iou_max > max_iou_thr:
             continue
         filtered_candidate_boxes_tensor = torch.cat((filtered_candidate_boxes_tensor,box.unsqueeze(0)))
+    print(filtered_candidate_boxes_tensor.shape)
+    print()
     return filtered_candidate_boxes_tensor # [[x,y,w,h], [x,y,w,h], [x,y,w,h] ...]
 
 def load_pkl(pkl_file):
@@ -81,7 +83,7 @@ def load_pkl(pkl_file):
 
 def filter_proposals_single(boxes_per_image_tensor):
     # Empty lists will be appended for images without proposals.
-    filtered_boxes_64_single = box_filter(candidate_boxes=boxes_per_image_tensor, max_iou_thr=IOU_THRESH)
+    filtered_boxes_64_single = box_filter(candidate_boxes_tensor=boxes_per_image_tensor, max_iou_thr=IOU_THRESH)
     return filtered_boxes_64_single
 
 def filter_proposals_with_names_single(args:list):
