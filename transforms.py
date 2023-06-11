@@ -83,7 +83,11 @@ def common_augmentations(image, type_two = False):
     gaus_blur = RandomApply(T.GaussianBlur((23, 23)), p = gaussian_prob)
     image = gaus_blur(image)
 
-    # TODO add solarization as UniVIP applied it (like BYOL)
+    solarize_prob = 0.2 if type_two else 0 # assymetric augm
+    assert not (image<=1).all(), "Images are in 0-1"
+    solarize_threshold = 128
+    solarize = T.RandomSolarize(threshold=solarize_threshold, p=solarize_prob)
+    image = solarize(image)
 
     # TODO do I have to call to tensor here in any case?
 
@@ -93,39 +97,6 @@ def common_augmentations(image, type_two = False):
     # TODO make sure image is dtype=torch.float32
     image = norm(image)
     return image
-
-def transform_instance(image, type_two = False):
-    # Apply horizontal flip (TODO might not need), T.RandomHorizontalFlip()
-    flipped_bool = random.random() < 0.5
-    if flipped_bool:
-        image = TF.hflip(image) # Used functional.
-
-    # TODO needs pil image as input?
-    # since the order has to change (with randperm i get_params) I must use ColorJitter below.
-    col_jit = RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)
-    image = col_jit(image)
-
-    # Apply grayscale with probability 0.2
-    gray_scale = T.RandomGrayscale(p=0.2)
-    image = gray_scale(image)
-
-
-    # Apply gaussian blur with probability 0.2
-    gaussian_prob = 0.1 if type_two else 1 # 1 for type_one
-    gaus_blur = RandomApply(T.GaussianBlur((23, 23)), p = gaussian_prob)
-    image = gaus_blur(image)
-
-    # TODO add solarization as UniVIP applied it (like BYOL)
-
-    # TODO do I have to call to tensor here in any case?
-
-    # They apply normalization (not explicit in the paper: https://github.com/lucidrains/byol-pytorch/issues/4#issue-641183816)
-    # Normalize the image (image has to be a tensor at this point, transforms before this can work on PIL images.)
-    norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
-    # TODO make sure image is dtype=torch.float32
-    image = norm(image)
-    return image
-    
 
 
 # 1. Get scene overlaps given the coordinates, TODO does not operate on tensors (should work on batches)

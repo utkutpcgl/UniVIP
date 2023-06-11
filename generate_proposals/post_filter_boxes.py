@@ -151,5 +151,3 @@ if __name__ == "__main__":
     dump_pkl(f'{Path(TARGET_PKL).stem}_filtered_64.pkl', filtered_data_64)
     ic("dump_pkl")
     dump_pkl(f'{Path(TARGET_PKL).stem}_filtered_96.pkl', filtered_data_96)
-
-    # TODO look whether there are empty lists (images with no proposals (which should not be the case.))
