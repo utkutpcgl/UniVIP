@@ -11,7 +11,7 @@ import random
 from naive_box_generation import add_n_random_boxes
 
 DEBUG = True
-FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/data_ops/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou_trial_250.pkl'
+FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO_proposals/trial/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou_trial_250.pkl'
 FILTER_SIZE = 64
 K_COMMON_INSTANCES = 4
 

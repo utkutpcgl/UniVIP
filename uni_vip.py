@@ -6,6 +6,7 @@ from functools import wraps
 import torch
 from torch import nn
 import torch.nn.functional as F
+from math import cos,pi
 
 from transforms import select_scenes, common_augmentations, get_concatenated_instances, K_COMMON_INSTANCES
 from sink_knop_dist import SinkhornDistance
@@ -52,12 +53,19 @@ def loss_fn(x, y):
 class EMA():
     def __init__(self, beta):
         super().__init__()
+        self.base_beta = beta
+        self.end_momentum = 1.0
         self.beta = beta
 
     def update_average(self, old, new):
         if old is None:
             return new
         return old * self.beta + (1 - self.beta) * new
+    
+    def update_beta(self, tot_iter, cur_iter):
+        """Update momentum with cosine, added by UTKU"""
+        self.beta = self.end_momentum - (self.end_momentum - self.base_beta) * (cos(pi * cur_iter / float(tot_iter)) + 1) / 2
+
 
 def update_moving_average(ema_updater, ma_model, current_model):
     for current_params, ma_params in zip(current_model.parameters(), ma_model.parameters()):
@@ -143,7 +151,7 @@ class NetWrapper(nn.Module):
 
 # main class
 
-class BYOL(nn.Module):
+class UVIP(nn.Module):
     def __init__(
         self,
         net,
@@ -187,7 +195,8 @@ class BYOL(nn.Module):
         del self.target_encoder
         self.target_encoder = None
 
-    def update_moving_average(self):
+    def update_moving_average(self, tot_iter, cur_iter):
+        self.target_ema_updater.update_beta(tot_iter=tot_iter, cur_iter=cur_iter)
         assert self.target_encoder is not None, 'target encoder has not been created yet'
         update_moving_average(self.target_ema_updater, self.target_encoder, self.online_encoder)
 
