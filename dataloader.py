@@ -34,8 +34,6 @@ class CustomDataset(Dataset):
         self.filtered_proposals = list(filtered_proposals.items())
         self.total_sample_count=len(self.filtered_proposals)
         self.transform = transform
-        
-        # You can prepare a list of img_paths here if necessary
     
     def __len__(self):
         # Return the total number of samples in the dataset
@@ -43,7 +41,7 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         # Load your data here using the idx
-        img_path, proposals = self.filtered_proposals[idx] 
+        img_path, proposal_boxes = self.filtered_proposals[idx] 
         # Load the image using torchvision's read_image
         img = io.read_image(img_path)
         
@@ -52,14 +50,19 @@ class CustomDataset(Dataset):
             img = self.transform(img)
         
         # Return the data in the format you need, for example:
-        return img_path, img, proposals
+        return img, proposal_boxes
 
 
-def init_dataset(batch_size):
+def init_dataset(batch_size, ddp=False):
     # Initialize your dataset
     dataset = CustomDataset(FILTERED_PROPOSALS)
     num_samples = len(dataset)
-    # Initialize DistributedSampler
-    sampler = DistributedSampler(dataset)
-    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler)
-    return dataloader, num_samples
+    sampler = None
+    if ddp:
+        # Initialize DistributedSampler
+        sampler = DistributedSampler(dataset)
+        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler,shuffle=True)
+    else:
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    return dataloader, sampler, num_samples
+

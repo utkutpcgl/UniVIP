@@ -203,6 +203,7 @@ class UVIP(nn.Module):
     def ii_loss_fn(self, online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg):
         """(target_proj_one+target_proj_two)/2, (online_pred_one+online_pred_two)/2
         return optimal_plan_matrix"""
+        # TODO apply for images and avg the loss over images.
         # instance to instance loss (optimal transport and sinkhorn-knopp)
         # Step 1: Compute dot_product_matrix
         O_matrix = online_pred_instance # (instance numbers K) x (number of features)
@@ -222,19 +223,26 @@ class UVIP(nn.Module):
 
     def forward(
         self,
-        img,
-        img_path,
+        img_data,
         return_embedding = False,
         return_projection = True
     ):
-        assert not (self.training and img.shape[0] == 1), 'you must have greater than 1 sample when training, due to the batchnorm in the projection layer'
+        img, proposal_boxes = img_data
+        assert not (self.training and img_data.shape[0] == 1), 'you must have greater than 1 sample when training, due to the batchnorm in the projection layer'
 
         if return_embedding:
             return self.online_encoder(img, return_projection = return_projection)
         
         # FEED THE SCENES
-        # Get the scenes and box_proposals (overlapping_boxes) for image1 and image2.
-        scene_one, scene_two, overlapping_boxes = select_scenes(img, img_path, self.image_size)
+        # Get scenes for each image individually
+        if img.ndim==4: # has batch dimension
+            scene_one_list, scene_two_list, overlapping_boxes_list = [], [], []
+            for single_img,single_proposal_boxes in zip(img,proposal_boxes):
+                scene_one, scene_two, overlapping_boxes = select_scenes(single_img=single_img,proposal_boxes=single_proposal_boxes,image_size=self.image_size)
+                scene_one_list.append(scene_one); scene_two_list.append(scene_two); overlapping_boxes_list.append(overlapping_boxes)
+            scene_one, scene_two, overlapping_boxes = torch.stack(scene_one_list), torch.stack(scene_two_list), torch.stack(overlapping_boxes_list)
+        else:
+            scene_one, scene_two, overlapping_boxes = select_scenes(single_img=img, proposal_boxes=proposal_boxes,image_size=self.image_size)
         scene_one = common_augmentations(scene_one,type_two=False)
         scene_two = common_augmentations(scene_two,type_two=True)
         with torch.no_grad():
@@ -254,6 +262,7 @@ class UVIP(nn.Module):
         # Get the crops from the image, resize them to 96, feed to online network, and concatenate them
         # Resize and feed instances in overlapping boxes to the online encoder
         instance_dim = 1 if img.ndim==4 else 0 # Choose the instance dimension 
+        # TODO left here!
         concatenated_instances = get_concatenated_instances(img, overlapping_boxes, instance_dim=instance_dim)
         concatenated_instances_squeezed = concatenated_instances.reshape(-1,*concatenated_instances.size()[-3:]) # Squeeze along batch dim
         concatenated_instances_squeezed = common_augmentations(concatenated_instances_squeezed,type_two=False)
@@ -281,7 +290,7 @@ class UVIP(nn.Module):
         loss_si = loss_si_one + loss_si_two
         # instance to instance loss (optimal transport and sinkhorn-knopp)
         online_pred_avg = (online_pred_one+online_pred_two)/2
-        target_proj_avg = (target_proj_one+target_proj_two)/2
+        target_proj_avg = (target_proj_one.detach()+target_proj_two.detach())/2
         # TODO check this loss twice.
         loss_ii = self.ii_loss_fn(online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg)
 

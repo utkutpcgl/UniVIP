@@ -88,9 +88,7 @@ def common_augmentations(image, type_two = False):
     solarize_threshold = 128
     solarize = T.RandomSolarize(threshold=solarize_threshold, p=solarize_prob)
     image = solarize(image)
-
-    # TODO do I have to call to tensor here in any case?
-
+    # NOTE toTensor not necessary because images are read with torchvision.io.read()
     # They apply normalization (not explicit in the paper: https://github.com/lucidrains/byol-pytorch/issues/4#issue-641183816)
     # Normalize the image (image has to be a tensor at this point, transforms before this can work on PIL images.)
     norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
@@ -127,20 +125,18 @@ def check_box_in_region(boxes, overlap_region):
     return (boxes[:, 0] >= r_x1) & (boxes[:, 1] >= r_y1) & (boxes[:, 2] <= r_x2) & (boxes[:, 3] <= r_y2)
 
 
-def get_overlapping_boxes(img_path, overlap_region):
+def get_overlapping_boxes(overlap_region, proposal_boxes):
     """ Get the proposed boxes in the overlapping region."""
-    all_proposals = FILTERED_PROPOSALS
-    proposal_boxes_for_image = all_proposals[img_path]
-    inside_region_mask = check_box_in_region(proposal_boxes_for_image, overlap_region=overlap_region)
-    overlapping_boxes = proposal_boxes_for_image[inside_region_mask]
+    inside_region_mask = check_box_in_region(proposal_boxes, overlap_region=overlap_region)
+    overlapping_boxes = proposal_boxes[inside_region_mask]
     return overlapping_boxes if len(overlapping_boxes)!=0 else torch.zeros(0, 4, dtype=torch.int64)
 
 
 # 2. If they have at least K_common_instances object regions in the overlapping region T return the scenes s1 and s2 (they are our targets)
-def select_scenes(img, img_path, image_size, K_common_instances=K_COMMON_INSTANCES, iters=20):
+def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_INSTANCES, iters=20):
     # TODO test this with trial pkl.
     # NOTE we get only K_common_instances boxes and ablations show there is no improvement after 4!!
-    """Returns scenes with at least K_common_instances common targets in the overlapping regions."""
+    """Returns scenes with at least K_common_instances common targets in the overlapping regions. Has to be applied to each image individually (not batch), blocking operations are not parallelizable effectively."""
     best_scenes={"overlapping_boxes":torch.zeros(0,4, dtype=torch.int64), "overlap_coord":None, "s1":None, "s2":None}
     while iters > 0:
         # I need the information which regions of the images were cropped and if RandomHorizontalFlip was applied (the region will change accordingly.)
@@ -150,7 +146,7 @@ def select_scenes(img, img_path, image_size, K_common_instances=K_COMMON_INSTANC
         if overlap_coord is None: # Check there is a large enough overlap
             continue
         # now check K_common_instances common instances.
-        overlapping_boxes = get_overlapping_boxes(img_path, overlap_coord)
+        overlapping_boxes = get_overlapping_boxes(overlap_coord, proposal_boxes)
         if len(overlapping_boxes) >= K_common_instances:
             return scene_one, scene_two, overlapping_boxes[:K_common_instances] # Get only first K_common_instances boxes.
         elif len(overlapping_boxes) > len(best_scenes["overlapping_boxes"]): # Update the best boxes for the fallback case.
@@ -166,6 +162,7 @@ def select_scenes(img, img_path, image_size, K_common_instances=K_COMMON_INSTANC
 def get_concatenated_instances(img, overlapping_boxes, instance_dim):
     # Resize and feed instances in overlapping boxes to the online encoder
     # When there is a batch dimension the instance_dim should be 1
+    # TODO no need for for loop, here https://chat.openai.com/share/54d6a0b1-b59d-40bd-a958-ceb3d1707731 
     instances = []
     for box in overlapping_boxes:
         x1, x2, y1, y2 = box
