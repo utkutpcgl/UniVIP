@@ -37,16 +37,6 @@ def set_requires_grad(model, val):
     for p in model.parameters():
         p.requires_grad = val
 
-# loss fn
-
-def loss_fn(x, y):
-    """Cosine similarity is (proportional (/2)) to MSE when x-y are l2 normalized
-    https://stats.stackexchange.com/questions/146221/is-cosine-similarity-identical-to-l2-normalized-euclidean-distance"""
-    # L2 normalization (Divided L2 norm), hence, resulting l2_norm = 1 --> MSE = cosine_sim 
-    x = F.normalize(x, dim=-1, p=2) # 
-    y = F.normalize(y, dim=-1, p=2)
-    return (2 - 2 * (x * y).sum(dim=-1)).mean()
-
 
 # exponential moving average
 
@@ -199,13 +189,20 @@ class UVIP(nn.Module):
         self.target_ema_updater.update_beta(tot_iter=tot_iter, cur_iter=cur_iter)
         assert self.target_encoder is not None, 'target encoder has not been created yet'
         update_moving_average(self.target_ema_updater, self.target_encoder, self.online_encoder)
+    
+    def byol_loss_fn(self, x, y):
+        """Cosine similarity is (proportional (/2)) to MSE when x-y are l2 normalized
+        https://stats.stackexchange.com/questions/146221/is-cosine-similarity-identical-to-l2-normalized-euclidean-distance"""
+        # L2 normalization (Divided L2 norm), hence, resulting l2_norm = 1 --> MSE = cosine_sim 
+        x = F.normalize(x, dim=-1, p=2) # 
+        y = F.normalize(y, dim=-1, p=2)
+        return (2 - 2 * (x * y).sum(dim=-1)).mean()
 
     def ii_loss_fn(self, online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg):
         """
         Calculate the instance to insatnce loss based on sinkhorn knopp iterations and optimal transportation described in the paper.
         matmul behavior: https://pytorch.org/docs/stable/generated/torch.matmul.html#:~:text=%3E%3E%3E%20tensor1%20%3D%20torch.randn(10%2C%203%2C%204)%0A%3E%3E%3E%20tensor2%20%3D%20torch.randn(10%2C%204%2C%205)%0A%3E%3E%3E%20torch.matmul(tensor1%2C%20tensor2).size()%0Atorch.Size(%5B10%2C%203%2C%205%5D) 
         """
-        # TODO apply for images and avg the loss over images.
         # Step 1: Compute dot_product_matrix
         O_matrix = online_pred_instance  # (batch_size, instance numbers K, number of features)
         T_matrix = target_proj_instance  # (batch_size, instance numbers K, number of features)
@@ -214,13 +211,15 @@ class UVIP(nn.Module):
         norm_vector_O = torch.norm(O_matrix, dim=-1, keepdim=True) # normalize over features
         norm_vector_T = torch.norm(T_matrix, dim=-1, keepdim=True) # normalize over features
         # Step 3: Compute C
-        ot_cosine_similarity_matrix = (dot_product_matrix / torch.matmul(norm_vector_O, norm_vector_T.transpose(1, 2)))
-        cost_matrix = 1 - ot_cosine_similarity_matrix
+        ot_cosine_similarity_matrix = (dot_product_matrix / torch.matmul(norm_vector_O, norm_vector_T.transpose(1, 2)))# (batch_size, instance numbers K, instance numbers K)
+        cost_matrix = 1 - ot_cosine_similarity_matrix# (batch_size, instance numbers K, instance numbers K)
+        # demander a, supplier b
         a_vector = torch.nn.functional.relu(torch.matmul(T_matrix, online_pred_avg.transpose(1, 2))) # (batch_size, instance numbers K, 1)
         b_vector = torch.nn.functional.relu(torch.matmul(O_matrix, target_proj_avg.transpose(1, 2))) # (batch_size, instance numbers K, 1)
-        _, optimal_plan_matrix = self.sinkhorn_distance(a_vector,b_vector,cost_matrix)
-        loss_ii = torch.sum(-torch.mul(optimal_plan_matrix,ot_cosine_similarity_matrix), dim=(-2,-1)) # Forces similar instance representations to be close to each other.
-        return loss_ii
+        _, optimal_plan_matrix = self.sinkhorn_distance(mu=a_vector,nu=b_vector,C=cost_matrix) # (batch_size, instance numbers K, instance numbers K)
+        # torch.mul is element-wise multiplication, then sum all elements of the cost matrix, then results per batch are averaged with mean
+        loss_ii = torch.sum(-torch.mul(optimal_plan_matrix,ot_cosine_similarity_matrix), dim=(-2,-1)).mean() # Forces similar instance representations to be close to each other.
+        return loss_ii # Averaged out of convenience
 
     def forward(
         self,
@@ -275,17 +274,16 @@ class UVIP(nn.Module):
 
         # CALCULATE LOSSES
         # Scene to scene loss
-        loss_ss_one = loss_fn(online_pred_one, target_proj_two.detach())
-        loss_ss_two = loss_fn(online_pred_two, target_proj_one.detach())
+        loss_ss_one = self.byol_loss_fn(online_pred_one, target_proj_two.detach())
+        loss_ss_two = self.byol_loss_fn(online_pred_two, target_proj_one.detach())
         loss_ss = loss_ss_one + loss_ss_two
         # Scene to instance loss
-        loss_si_one = loss_fn(online_concatenated_final_instance_representations, target_proj_one.detach())
-        loss_si_two = loss_fn(online_concatenated_final_instance_representations, target_proj_two.detach())
+        loss_si_one = self.byol_loss_fn(online_concatenated_final_instance_representations, target_proj_one.detach())
+        loss_si_two = self.byol_loss_fn(online_concatenated_final_instance_representations, target_proj_two.detach())
         loss_si = loss_si_one + loss_si_two
         # instance to instance loss (optimal transport and sinkhorn-knopp)
         online_pred_avg = (online_pred_one+online_pred_two)/2
         target_proj_avg = (target_proj_one.detach()+target_proj_two.detach())/2
-        # TODO check this loss twice.
         loss_ii = self.ii_loss_fn(online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg)
 
         return loss_ss + loss_si + loss_ii

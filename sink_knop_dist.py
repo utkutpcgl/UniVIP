@@ -1,6 +1,6 @@
 # Discussion about the difference between this and the original sinkhorn algorithms implementation. This one is applying something like momentum: https://chat.openai.com/share/710bf589-eb7f-4c62-87d9-8a587c7b1105
-# I took it from https://github.com/Megvii-BaseDetection/OTA/blob/2c85b4d0f9031396854aae969330dde2ab5eacbd/playground/detection/coco/ota.x101.fpn.coco.800size.1x/fcos.py#L384
-# and modified accordingly.
+# I took it from https://github.com/Megvii-BaseDetection/OTA/blob/2c85b4d0f9031396854aae969330dde2ab5eacbd/playground/detection/coco/ota.x101.fpn.coco.800size.1x/fcos.py#L665
+# and modified accordingly (u and v update order were confused).
 # OTA took it from https://github.com/gpeyre/SinkhornAutoDiff/blob/master/sinkhorn_pointcloud.py and modified without mentioning.
 import torch
 
@@ -17,12 +17,14 @@ class SinkhornDistance(torch.nn.Module):
         self.max_iter = max_iter
 
     def forward(self, mu, nu, C):
-        u = torch.ones_like(mu) # demander a
-        v = torch.ones_like(nu) # supplier b
+        # NOTE checked u-a-demander v-b-supplier correspondance from OTA paper.
+        u = torch.ones_like(mu).squeeze(dim=-1) # demander a -> (batch_size, instance numbers K, 1).squeeze(dim=-1)
+        v = torch.ones_like(nu).squeeze(dim=-1) # supplier b -> (batch_size, instance numbers K, 1).squeeze(dim=-1)
+        # C (batch_size, instance numbers K, instance numbers K)
 
         # Sinkhorn iterations
         for _ in range(self.max_iter):
-            # NOTE original algorithm first updates u then v. Hence modified.
+            # NOTE original algorithm first updates u then v. Hence modified. UniVIP Li_i is kind of symmetric though.
             u = self.eps * (torch.log(mu + 1e-8) - torch.logsumexp(self.M(C, u, v), dim=-1)) + u
             # transpose((-2, -1)) to avoid batch dimension
             v = self.eps * (torch.log(nu + 1e-8) - torch.logsumexp(self.M(C, u, v).transpose(-2, -1), dim=-1)) + v
