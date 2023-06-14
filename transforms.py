@@ -1,10 +1,9 @@
+# Author: Utku Mert Topçuoğlu (modified functions from OTA papers repo.)
 import pickle
 from icecream import ic
 import time
-from pathlib import Path
 import torch
 from torch import nn
-import torch.nn.functional as F
 from torchvision import transforms as T
 import torchvision.transforms.functional as TF
 from torchvision.ops import roi_align
@@ -36,14 +35,24 @@ def load_pkl(pkl_file):
     return raw_data
 # Load the filtered box proposal pkl files, convert to faster readable form (tensors?)
 FILTERED_PROPOSALS = load_pkl(pkl_file=FILTERED_PKL)
-# How do I construct the dataloader and set the batch (size)?
 
-def tlhw_to_xyxy(t, l, h, w):
-    x1 = l
-    y1 = t
-    x2 = l + w
-    y2 = t + h
-    return x1, y1, x2, y2
+def xywh_to_xyxy(proposal_boxes):
+    """
+    Convert bounding boxes from (top-left x, top-left y, width, height) format
+    to (x1, y1, x2, y2) format.
+    Arguments:
+    - proposal_boxes: A torch tensor of shape (K, 4), where K is the number of boxes,
+                      and each box is represented by [x, y, w, h].
+    Returns:
+    - A torch tensor of shape (K, 4), where each box is represented by [x1, y1, x2, y2].
+    """
+    # Extract x, y, width and height
+    x, y, w, h = proposal_boxes[:, 0], proposal_boxes[:, 1], proposal_boxes[:, 2], proposal_boxes[:, 3]
+    # Compute x2 and y2
+    x2 = x + w
+    y2 = y + h
+    # Stack the coordinates to get the final tensor
+    return torch.stack([x, y, x2, y2], dim=1)
 
 # augmentation utils
 
@@ -98,10 +107,16 @@ def common_augmentations(image, type_two = False):
     return image
 
 
-# 1. Get scene overlaps given the coordinates, TODO does not operate on tensors (should work on batches)
+# 1. Get scene overlaps given the coordinates
 def get_scene_overlap(crop_coordinates_one, crop_coordinates_two):
     min_overlap_size = FILTER_SIZE*3/2 # filter scenes with too small overlap
-    """crop_coordinates has (top, left, height, width)"""
+    """return scene as (x1, y1, x2, y2)"""
+    def xywh_to_xyxy_single(x,y,w,h):
+        x1 = x
+        y1 = y
+        x2 = x + w
+        y2 = y + h
+        return x1, y1, x2, y2
     def get_overlap(coord_one, coord_two):
         x1_1, y1_1, x2_1, y2_1 = coord_one
         x1_2, y1_2, x2_2, y2_2 = coord_two
@@ -109,26 +124,25 @@ def get_scene_overlap(crop_coordinates_one, crop_coordinates_two):
         y1 = max(y1_1, y1_2) # top
         x2 = min(x2_1, x2_2) # right
         y2 = min(y2_1, y2_2) # bottom
-
         return (x1, y1, x2, y2) if x1 < x2 and y1 < y2 else None
 
-    coord_one = tlhw_to_xyxy(crop_coordinates_one)
-    coord_two = tlhw_to_xyxy(crop_coordinates_two)
-
+    coord_one = xywh_to_xyxy_single(crop_coordinates_one)
+    coord_two = xywh_to_xyxy_single(crop_coordinates_two)
     (x1, y1, x2, y2) = get_overlap(coord_one, coord_two)
-
     return None if (x2 - x1 < min_overlap_size or y2 - y1 < min_overlap_size) else (x1, y1, x2, y2)
 
 
-def check_box_in_region(boxes, overlap_region):
-    """Check if boxes are inside the region fully."""
+def check_box_in_region(overlap_region, proposal_boxes):
+    """Check if boxes are inside the region fully.
+    overlap_region has (x,y,w,h), proposal_boxes has (x1,y1,x2,y2) content"""
+    xyxy_bs = xywh_to_xyxy(proposal_boxes) 
     r_x1, r_y1, r_x2, r_y2 = overlap_region
-    return (boxes[:, 0] >= r_x1) & (boxes[:, 1] >= r_y1) & (boxes[:, 2] <= r_x2) & (boxes[:, 3] <= r_y2)
+    return (xyxy_bs[:, 0] >= r_x1) & (xyxy_bs[:, 1] >= r_y1) & (xyxy_bs[:, 2] <= r_x2) & (xyxy_bs[:, 3] <= r_y2)
 
 
 def get_overlapping_boxes(overlap_region, proposal_boxes):
     """ Get the proposed boxes in the overlapping region."""
-    inside_region_mask = check_box_in_region(proposal_boxes, overlap_region=overlap_region)
+    inside_region_mask = check_box_in_region(overlap_region=overlap_region, proposal_boxes=proposal_boxes)
     overlapping_boxes = proposal_boxes[inside_region_mask]
     return overlapping_boxes if len(overlapping_boxes)!=0 else torch.zeros(0, 4, dtype=torch.int64)
 
@@ -147,7 +161,7 @@ def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_I
         if overlap_coord is None: # Check there is a large enough overlap
             continue
         # now check K_common_instances common instances.
-        overlapping_boxes = get_overlapping_boxes(overlap_coord, proposal_boxes)
+        overlapping_boxes = get_overlapping_boxes(overlap_region=overlap_coord, proposal_boxes=proposal_boxes)
         if len(overlapping_boxes) >= K_common_instances:
             return scene_one, scene_two, overlapping_boxes[:K_common_instances] # Get only first K_common_instances boxes.
         elif len(overlapping_boxes) > len(best_scenes["overlapping_boxes"]): # Update the best boxes for the fallback case.
@@ -170,10 +184,12 @@ def get_concatenated_instances(img, overlapping_boxes):
     num_boxes = overlapping_boxes.size(1)
     
     # Create batch indices to be concatenated with boxes -> (batch_size*K), each box will have an index (showing where it belongs)
-    batch_indices = torch.arange(img.size(0), dtype=torch.float32).view(-1, 1).repeat(1, num_boxes).view(-1, 1)
+    batch_indices = torch.arange(img.size(0)).view(-1, 1).repeat(1, num_boxes).view(-1, 1)
     
     # Reshape boxes for roi_align
-    boxes = overlapping_boxes.view(-1, 4).float() # Collect total number of boxes in the first dim (batch_size*K)
+    boxes = overlapping_boxes.view(-1, 4) # Collect total number of boxes in the first dim (batch_size*K)
+    # NOTE for roi_align to work, overlapping boxes has to be converted to xyxy format.
+    boxes = xywh_to_xyxy(boxes)
     
     # Concatenate batch indices with boxes, index shows which image in a batch each box belongs
     boxes_with_indices = torch.cat([batch_indices, boxes], dim=1)

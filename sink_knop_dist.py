@@ -1,3 +1,5 @@
+# Author: Utku Mert Topçuoğlu + https://github.com/Megvii-BaseDetection/OTA/blob/2c85b4d0f9031396854aae969330dde2ab5eacbd/playground/detection/coco/ota.x101.fpn.coco.800size.1x/fcos.py#L665
+
 # Discussion about the difference between this and the original sinkhorn algorithms implementation. This one is applying something like momentum: https://chat.openai.com/share/710bf589-eb7f-4c62-87d9-8a587c7b1105
 # I took it from https://github.com/Megvii-BaseDetection/OTA/blob/2c85b4d0f9031396854aae969330dde2ab5eacbd/playground/detection/coco/ota.x101.fpn.coco.800size.1x/fcos.py#L665
 # and modified accordingly (u and v update order were confused).

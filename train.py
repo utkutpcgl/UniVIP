@@ -1,3 +1,4 @@
+# Author: Utku Mert Topçuoğlu (modified from https://github.com/lucidrains/byol-pytorch/blob/master/byol_pytorch/byol_pytorch.py#LL267C1-L268C27.)
 """
 Run with python -m torch.distributed.launch --nproc_per_node=NUM_GPUS_YOU_HAVE train_script.py
 

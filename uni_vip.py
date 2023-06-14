@@ -1,6 +1,4 @@
-"""This code was originaly taken from 
-https://github.com/lucidrains/byol-pytorch/blob/master/byol_pytorch/byol_pytorch.py 
-and modified accordingly."""
+# Author: Utku Mert Topçuoğlu + https://github.com/lucidrains/byol-pytorch/blob/master/byol_pytorch/byol_pytorch.py
 import copy
 from functools import wraps
 import torch
