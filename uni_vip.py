@@ -201,24 +201,25 @@ class UVIP(nn.Module):
         update_moving_average(self.target_ema_updater, self.target_encoder, self.online_encoder)
 
     def ii_loss_fn(self, online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg):
-        """(target_proj_one+target_proj_two)/2, (online_pred_one+online_pred_two)/2
-        return optimal_plan_matrix"""
+        """
+        Calculate the instance to insatnce loss based on sinkhorn knopp iterations and optimal transportation described in the paper.
+        matmul behavior: https://pytorch.org/docs/stable/generated/torch.matmul.html#:~:text=%3E%3E%3E%20tensor1%20%3D%20torch.randn(10%2C%203%2C%204)%0A%3E%3E%3E%20tensor2%20%3D%20torch.randn(10%2C%204%2C%205)%0A%3E%3E%3E%20torch.matmul(tensor1%2C%20tensor2).size()%0Atorch.Size(%5B10%2C%203%2C%205%5D) 
+        """
         # TODO apply for images and avg the loss over images.
-        # instance to instance loss (optimal transport and sinkhorn-knopp)
         # Step 1: Compute dot_product_matrix
-        O_matrix = online_pred_instance # (instance numbers K) x (number of features)
-        T_matrix = target_proj_instance # (instance numbers K) x (number of features)
-        dot_product_matrix = torch.mm(O_matrix.t(), T_matrix)
+        O_matrix = online_pred_instance  # (batch_size, instance numbers K, number of features)
+        T_matrix = target_proj_instance  # (batch_size, instance numbers K, number of features)
+        dot_product_matrix = torch.matmul(O_matrix, T_matrix.transpose(1, 2))  # (batch_size, instance numbers K, instance numbers K)
         # Step 2: Compute Norm matrices
-        norm_matrix_O = torch.norm(O_matrix, dim=0, keepdim=True)
-        norm_matrix_T = torch.norm(T_matrix, dim=0, keepdim=True)
+        norm_vector_O = torch.norm(O_matrix, dim=-1, keepdim=True) # normalize over features
+        norm_vector_T = torch.norm(T_matrix, dim=-1, keepdim=True) # normalize over features
         # Step 3: Compute C
-        ot_cosine_similarity_matrix = (dot_product_matrix / (norm_matrix_O.t() * norm_matrix_T))
+        ot_cosine_similarity_matrix = (dot_product_matrix / torch.matmul(norm_vector_O, norm_vector_T.transpose(1, 2)))
         cost_matrix = 1 - ot_cosine_similarity_matrix
-        a_vector = torch.max(T_matrix.t*online_pred_avg,0)
-        b_vector = torch.max(O_matrix.t*target_proj_avg,0)
+        a_vector = torch.nn.functional.relu(torch.matmul(T_matrix, online_pred_avg.transpose(1, 2))) # (batch_size, instance numbers K, 1)
+        b_vector = torch.nn.functional.relu(torch.matmul(O_matrix, target_proj_avg.transpose(1, 2))) # (batch_size, instance numbers K, 1)
         _, optimal_plan_matrix = self.sinkhorn_distance(a_vector,b_vector,cost_matrix)
-        loss_ii = torch.sum(-torch.mul(optimal_plan_matrix*ot_cosine_similarity_matrix), dim=(-2,-1)) # Forces similar instance representations to be close to each other.
+        loss_ii = torch.sum(-torch.mul(optimal_plan_matrix,ot_cosine_similarity_matrix), dim=(-2,-1)) # Forces similar instance representations to be close to each other.
         return loss_ii
 
     def forward(
@@ -235,14 +236,12 @@ class UVIP(nn.Module):
         
         # FEED THE SCENES
         # Get scenes for each image individually
-        if img.ndim==4: # has batch dimension
-            scene_one_list, scene_two_list, overlapping_boxes_list = [], [], []
-            for single_img,single_proposal_boxes in zip(img,proposal_boxes):
-                scene_one, scene_two, overlapping_boxes = select_scenes(single_img=single_img,proposal_boxes=single_proposal_boxes,image_size=self.image_size)
-                scene_one_list.append(scene_one); scene_two_list.append(scene_two); overlapping_boxes_list.append(overlapping_boxes)
-            scene_one, scene_two, overlapping_boxes = torch.stack(scene_one_list), torch.stack(scene_two_list), torch.stack(overlapping_boxes_list)
-        else:
-            scene_one, scene_two, overlapping_boxes = select_scenes(single_img=img, proposal_boxes=proposal_boxes,image_size=self.image_size)
+        assert img.ndim==4 # NOTE image must have batch dimension
+        scene_one_list, scene_two_list, overlapping_boxes_list = [], [], []
+        for single_img,single_proposal_boxes in zip(img,proposal_boxes):
+            scene_one, scene_two, overlapping_boxes = select_scenes(single_img=single_img,proposal_boxes=single_proposal_boxes,image_size=self.image_size)
+            scene_one_list.append(scene_one); scene_two_list.append(scene_two); overlapping_boxes_list.append(overlapping_boxes)
+        scene_one, scene_two, overlapping_boxes = torch.stack(scene_one_list), torch.stack(scene_two_list), torch.stack(overlapping_boxes_list)
         scene_one = common_augmentations(scene_one,type_two=False)
         scene_two = common_augmentations(scene_two,type_two=True)
         with torch.no_grad():
@@ -261,22 +260,17 @@ class UVIP(nn.Module):
         # FEED THE INSTANCES
         # Get the crops from the image, resize them to 96, feed to online network, and concatenate them
         # Resize and feed instances in overlapping boxes to the online encoder
-        instance_dim = 1 if img.ndim==4 else 0 # Choose the instance dimension 
-        # TODO left here!
-        concatenated_instances = get_concatenated_instances(img, overlapping_boxes, instance_dim=instance_dim)
-        concatenated_instances_squeezed = concatenated_instances.reshape(-1,*concatenated_instances.size()[-3:]) # Squeeze along batch dim
-        concatenated_instances_squeezed = common_augmentations(concatenated_instances_squeezed,type_two=False)
-        online_proj_instance, _ = self.online_encoder(concatenated_instances_squeezed)
-        online_pred_instance = self.online_predictor(online_proj_instance)
-        # restore the batch dimension if it was available
-        online_pred_instance = online_pred_instance if instance_dim==0 else online_pred_instance.reshape(img.shape[0], self.K_common_instances, online_pred_instance.shape[-1])
-        online_pred_concatenated_instance = torch.concat(online_pred_instance, dim=instance_dim)
+        concatenated_instances = get_concatenated_instances(img, overlapping_boxes) # Squeezed along batch dim
+        concatenated_instances = common_augmentations(concatenated_instances,type_two=False)
+        online_proj_instance, _ = self.online_encoder(concatenated_instances)
+        online_pred_instance = self.online_predictor(online_proj_instance) # online_pred_instance is of shape (img.shape[0]*self.K_common_instances, online_pred_instance.shape[-1])
+        online_pred_concatenated_instance = online_pred_instance.reshape(img.shape[0], self.K_common_instances*online_pred_instance.shape[-1]) # NOTE restore the batch dimension and concatenate instance representations.
         online_concatenated_final_instance_representations = self.instances_to_scene_linear(online_pred_concatenated_instance)
         with torch.no_grad():
             # Pass instances in the overlapping region
-            target_proj_instance, _ = target_encoder(concatenated_instances_squeezed)
+            target_proj_instance, _ = target_encoder(concatenated_instances)
             target_proj_instance.detach_()
-            target_proj_instance = target_proj_instance if instance_dim==0 else target_proj_instance.reshape(img.shape[0], self.K_common_instances, target_proj_instance.shape[-1])
+            target_proj_instance = target_proj_instance.reshape(img.shape[0], self.K_common_instances, target_proj_instance.shape[-1])
         
 
         # CALCULATE LOSSES

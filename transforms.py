@@ -7,6 +7,7 @@ from torch import nn
 import torch.nn.functional as F
 from torchvision import transforms as T
 import torchvision.transforms.functional as TF
+from torchvision.ops import roi_align
 import random
 from naive_box_generation import add_n_random_boxes
 
@@ -158,15 +159,26 @@ def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_I
         best_scenes["overlapping_boxes"] = add_n_random_boxes(overlap_coord=best_scenes["overlap_coord"], overlapping_boxes=best_scenes["overlapping_boxes"], n_random_boxes=missing_box_num)
         return best_scenes["s1"], best_scenes["s2"], best_scenes["overlapping_boxes"][:K_common_instances] # Get only first K_common_instances boxes.
 
-    
-def get_concatenated_instances(img, overlapping_boxes, instance_dim):
+
+def get_concatenated_instances(img, overlapping_boxes):
     # Resize and feed instances in overlapping boxes to the online encoder
-    # When there is a batch dimension the instance_dim should be 1
-    # TODO no need for for loop, here https://chat.openai.com/share/54d6a0b1-b59d-40bd-a958-ceb3d1707731 
-    instances = []
-    for box in overlapping_boxes:
-        x1, x2, y1, y2 = box
-        instance = img[..., y1:y2, x1:x2] # crop instance from image tensor
-        instance = F.interpolate(instance, size=(96, 96), mode="bicubic") # resize instance to 96x96
-        instances.append(instance)
-    return torch.stack(instances, dim=instance_dim) # vertical stack.
+    # Interpolation was not specified, hence can use bilinear interpolation as in roi_align.
+    # img shape should be (b, c, h, w) - batch, channels, height, width
+    # overlapping_boxes shape should be (b, n, 4) - batch, number of boxes, coordinates (x1, y1, x2, y2)
+
+    # Number of boxes per image
+    num_boxes = overlapping_boxes.size(1)
+    
+    # Create batch indices to be concatenated with boxes -> (batch_size*K), each box will have an index (showing where it belongs)
+    batch_indices = torch.arange(img.size(0), dtype=torch.float32).view(-1, 1).repeat(1, num_boxes).view(-1, 1)
+    
+    # Reshape boxes for roi_align
+    boxes = overlapping_boxes.view(-1, 4).float() # Collect total number of boxes in the first dim (batch_size*K)
+    
+    # Concatenate batch indices with boxes, index shows which image in a batch each box belongs
+    boxes_with_indices = torch.cat([batch_indices, boxes], dim=1)
+    
+    # Crop and resize using roi_align
+    output_size = (96, 96)
+    instances = roi_align(img, boxes_with_indices, output_size)
+    return instances # Now instances tensor has shape (b * n, c, 96, 96), TODO you can reshape it if needed
