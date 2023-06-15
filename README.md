@@ -48,3 +48,4 @@ At the end you will have pkl files with bounding box proposals (filtered for 64 
 - Remove any left TODOs
 - Start training.
 - Check max_trials for naive box
+- TODO what form does rand_res_crop rreturn ? important for later code.

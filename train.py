@@ -31,7 +31,7 @@ DEVICE = 0 # Device for single gpu training
 WORLD_SIZE = 8 # Number of GPUs for multi gpu training
 
 # was not pretrained by default for ORL also.https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/selfsup/orl/coco/stage3/r50_bs512_ep800.py#L7 
-batch_size = 1
+batch_size = 2
 total_epochs = 800
 # update momentum every iteration with cosine annealing.
 base_learning_rate = 0.2 # same as ORL.
@@ -41,9 +41,11 @@ CHECKPOINT_PATH = "uni_vip_pretrained_model.pt"
 # Create DataLoader with the custom dataset and the distributed sampler
 dataloader, sampler, num_samples = init_dataset(batch_size=batch_size, ddp=USE_DDP)
 
-# Iteration count
+# Global variables
 total_iterations = ceil(num_samples / batch_size)*total_epochs 
 iteration_count=0
+writer = SummaryWriter(log_dir=str(LOG_DIR))
+
 
 # Helper functions
 def log_text(file, content):
@@ -66,7 +68,7 @@ def cleanup():
     dist.destroy_process_group()
 
 def train(rank, world_size):
-    global iteration_count, total_iterations
+    global iteration_count, total_iterations, writer
     # Create the model.
     if USE_DDP:
         ddp_setup(rank=rank, world_size=world_size)
@@ -100,7 +102,8 @@ def train(rank, world_size):
         # train for one epoch.
         for img_data in dataloader:
             iteration_count+=1
-            loss = model(img_data)
+            scene_one, scene_two, concatenated_instances=(item.to(rank) for item in img_data)
+            loss = model((scene_one, scene_two, concatenated_instances))
             total_epoch_loss += loss.item()
             optimizer.zero_grad()
             loss.backward()
@@ -128,7 +131,7 @@ if __name__ == "__main__":
     if USE_DDP:
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = '12355' # set port for communication
-        mp.spawn(train,args=(rank,WORLD_SIZE),nprocs=WORLD_SIZE, join=True) # TODO check if assigns rank correctly to each call.
+        mp.spawn(train,args=(rank, WORLD_SIZE),nprocs=WORLD_SIZE, join=True) # TODO check if assigns rank correctly to each call.
     else:
         train(rank=DEVICE, world_size=1) # single gpu train
 

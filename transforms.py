@@ -75,7 +75,7 @@ def crop_scene(image, image_size):
     top, left, height, width = rand_res_crop.get_params(image, rand_res_crop.scale, rand_res_crop.ratio)
     # if size is int (not list) smaller edge will be scaled to match this.
     # byol uses bicubic interpolation.
-    image = TF.resized_crop(image, top, left, height, width, size=(image_size,  image_size), interpolation=TF.InterpolationMode.BICUBIC).clamp(min=0, max=1)
+    image = TF.resized_crop(image, top, left, height, width, size=(image_size,  image_size), interpolation=TF.InterpolationMode.BICUBIC) # If necessary .clamp(min=0, max=1)
     return image, (top, left, height, width)
 
 def common_augmentations(image, type_two = False):
@@ -101,19 +101,20 @@ def common_augmentations(image, type_two = False):
     # NOTE toTensor not necessary because images are read with torchvision.io.read()
     # They apply normalization (not explicit in the paper: https://github.com/lucidrains/byol-pytorch/issues/4#issue-641183816)
     norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
-    assert (image<=1).all(), "Images are not in 0-1"
+    image = norm(image)
     return image
 
 
 # 1. Get scene overlaps given the coordinates
 def get_scene_overlap(crop_coordinates_one, crop_coordinates_two):
-    min_overlap_size = FILTER_SIZE*3/2 # filter scenes with too small overlap
-    """return scene as (x1, y1, x2, y2)"""
-    def xywh_to_xyxy_single(x,y,w,h):
-        x1 = x
-        y1 = y
-        x2 = x + w
-        y2 = y + h
+    min_overlap_size = FILTER_SIZE*3/2 # filter scenes with too small overlap , NOTE might cause difference with original paper
+    """ crop_coordinates are in t,l,h,w form (https://pytorch.org/vision/main/generated/torchvision.transforms.RandomResizedCrop.html)
+    return scene as (x1, y1, x2, y2)"""
+    def tlhw_to_xyxy_single(t,l,h,w):
+        x1 = l
+        y1 = t
+        x2 = x1 + w
+        y2 = y1 + h
         return x1, y1, x2, y2
     def get_overlap(coord_one, coord_two):
         x1_1, y1_1, x2_1, y2_1 = coord_one
@@ -124,8 +125,8 @@ def get_scene_overlap(crop_coordinates_one, crop_coordinates_two):
         y2 = min(y2_1, y2_2) # bottom
         return (x1, y1, x2, y2)
 
-    coord_one = xywh_to_xyxy_single(*crop_coordinates_one)
-    coord_two = xywh_to_xyxy_single(*crop_coordinates_two)
+    coord_one = tlhw_to_xyxy_single(*crop_coordinates_one)
+    coord_two = tlhw_to_xyxy_single(*crop_coordinates_two)
     (x1, y1, x2, y2) = get_overlap(coord_one, coord_two)
     return None if (x2 - x1 < min_overlap_size or y2 - y1 < min_overlap_size) else (x1, y1, x2, y2)
 
@@ -147,9 +148,10 @@ def get_overlapping_boxes(overlap_region, proposal_boxes):
 
 # 2. If they have at least K_common_instances object regions in the overlapping region T return the scenes s1 and s2 (they are our targets)
 def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_INSTANCES, iters=50):
+    # TODO Visualize scenes with overlapping boxes for validation
     # NOTE we get only K_common_instances boxes and ablations show there is no improvement after 4!!
     """Returns scenes with at least K_common_instances common targets in the overlapping regions. Has to be applied to each image individually (not batch), blocking operations are not parallelizable effectively."""
-    best_scenes={"overlapping_boxes":torch.zeros(0,4, dtype=torch.int64), "overlap_coord":None, "s1":None, "s2":None}
+    best_scenes={"overlapping_boxes":[], "overlap_coord":None, "s1":None, "s2":None}
     while iters > 0:
         # I need the information which regions of the images were cropped and if RandomHorizontalFlip was applied (the region will change accordingly.)
         scene_one, crop_coordinates_one  = crop_scene(img, image_size)
@@ -172,6 +174,8 @@ def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_I
 
 
 def get_concatenated_instances(img, overlapping_boxes):
+    if img.ndim==3:
+        img, overlapping_boxes = img.unsqueeze(dim=0), overlapping_boxes.unsqueeze(dim=0)
     # Resize and feed instances in overlapping boxes to the online encoder
     # Interpolation was not specified, hence can use bilinear interpolation as in roi_align.
     # img shape should be (b, c, h, w) - batch, channels, height, width
@@ -194,4 +198,4 @@ def get_concatenated_instances(img, overlapping_boxes):
     # Crop and resize using roi_align
     output_size = (96, 96)
     instances = roi_align(img, boxes_with_indices, output_size)
-    return instances # Now instances tensor has shape (b * n, c, 96, 96)
+    return instances # Now instances tensor has shape (n, c, 96, 96)
