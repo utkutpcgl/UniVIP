@@ -36,7 +36,7 @@ def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio
     """
     iou = 1
     trial_count = 0 
-    while iou>iou_threshold and trial_count<max_trials:
+    while iou>iou_threshold: #  and trial_count<max_trials
         # Generate w
         (o_x1,o_y1,o_x2,o_y2)=overlap_coord
         max_width, max_height = o_x2-o_x1, o_y2-o_y1

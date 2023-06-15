@@ -1,4 +1,5 @@
 # Author: Utku Mert Topçuoğlu (took help from chatgpt https://chat.openai.com/share/caa323fa-babc-4b26-9faf-028cf10f740b.)
+import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data.distributed import DistributedSampler
 import torchvision.io as io
@@ -8,6 +9,7 @@ import time
 
 DEBUG = True
 FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO_proposals/trial/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou_trial_250.pkl'
+DATASET_PATH = "/raid/utku/datasets/COCO_dataset/train2017/"
 
 if not DEBUG:
     ic.disable()
@@ -32,9 +34,11 @@ FILTERED_PROPOSALS = load_pkl(pkl_file=FILTERED_PKL)
 
 class CustomDataset(Dataset):
     def __init__(self, filtered_proposals:dict, transform=None):
-        self.filtered_proposals = list(filtered_proposals.items())
+        self.filtered_proposals = list(filtered_proposals["bbox"].items())
         self.total_sample_count=len(self.filtered_proposals)
         self.transform = transform
+        sample_img = self.__getitem__(0)[0]
+        assert sample_img.dtype == torch.float32 and sample_img.max() <= 1 and sample_img.min() >= 0
     
     def __len__(self):
         # Return the total number of samples in the dataset
@@ -42,16 +46,19 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         # Load your data here using the idx
-        img_path, proposal_boxes = self.filtered_proposals[idx] 
-        # Load the image using torchvision's read_image
-        img = io.read_image(img_path)
+        print(idx)
+        img_name, proposal_boxes = self.filtered_proposals[idx] 
+        img_path = DATASET_PATH + img_name
+        # Load the image using torchvision's read_image, reads int8 (cv2 also reads so)
+        img = io.read_image(img_path)/255 # convert to 0-1 float32
+        # NOTE feeding non-normalized float image values to ColorJitter clamps all values to max(x,1.0)!!!
         
         # apply transforms if they are defined
         if self.transform:
             img = self.transform(img)
         
         # Return the data in the format you need, for example:
-        return img, proposal_boxes
+        return (img, proposal_boxes, img_path)
 
 
 def init_dataset(batch_size, ddp=False):

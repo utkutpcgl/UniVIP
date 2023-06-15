@@ -169,8 +169,8 @@ class UVIP(nn.Module):
         device = get_module_device(net)
         self.to(device)
 
-        # send a mock image tensor to instantiate singleton parameters
-        self.forward(torch.randn(2, 3, image_size, image_size, device=device))
+        # send a mock image tensor to instantiate singleton parameters # NOTE batch size 1 gives error.
+        self.forward(torch.rand(size=(3, 2, 3, image_size, image_size), device=device))
     
 
     @singleton('target_encoder')
@@ -212,8 +212,8 @@ class UVIP(nn.Module):
         ot_cosine_similarity_matrix = (dot_product_matrix / torch.matmul(norm_vector_O, norm_vector_T.transpose(1, 2)))# (batch_size, instance numbers K, instance numbers K)
         cost_matrix = 1 - ot_cosine_similarity_matrix# (batch_size, instance numbers K, instance numbers K)
         # demander a, supplier b
-        a_vector = torch.nn.functional.relu(torch.matmul(T_matrix, online_pred_avg.transpose(1, 2))) # (batch_size, instance numbers K, 1)
-        b_vector = torch.nn.functional.relu(torch.matmul(O_matrix, target_proj_avg.transpose(1, 2))) # (batch_size, instance numbers K, 1)
+        a_vector = torch.nn.functional.relu(torch.matmul(T_matrix, online_pred_avg.unsqueeze(dim=-1))) # (batch_size, instance numbers K, 1)
+        b_vector = torch.nn.functional.relu(torch.matmul(O_matrix, target_proj_avg.unsqueeze(dim=-1))) # (batch_size, instance numbers K, 1)
         _, optimal_plan_matrix = self.sinkhorn_distance(mu=a_vector,nu=b_vector,C=cost_matrix) # (batch_size, instance numbers K, instance numbers K)
         # torch.mul is element-wise multiplication, then sum all elements of the cost matrix, then results per batch are averaged with mean
         loss_ii = torch.sum(-torch.mul(optimal_plan_matrix,ot_cosine_similarity_matrix), dim=(-2,-1)).mean() # Forces similar instance representations to be close to each other.
@@ -225,8 +225,8 @@ class UVIP(nn.Module):
         return_embedding = False,
         return_projection = True
     ):
-        img, proposal_boxes = img_data
-        assert not (self.training and img_data.shape[0] == 1), 'you must have greater than 1 sample when training, due to the batchnorm in the projection layer'
+        img, proposal_boxes, img_path = img_data
+        assert not (self.training and img.shape[0] == 1), 'you must have greater than 1 sample when training, due to the batchnorm in the projection layer'
 
         if return_embedding:
             return self.online_encoder(img, return_projection = return_projection)
@@ -236,7 +236,8 @@ class UVIP(nn.Module):
         assert img.ndim==4 # NOTE image must have batch dimension
         scene_one_list, scene_two_list, overlapping_boxes_list = [], [], []
         for single_img,single_proposal_boxes in zip(img,proposal_boxes):
-            scene_one, scene_two, overlapping_boxes = select_scenes(single_img=single_img,proposal_boxes=single_proposal_boxes,image_size=self.image_size)
+            scene_one, scene_two, overlapping_boxes = select_scenes(img=single_img,proposal_boxes=single_proposal_boxes,image_size=self.image_size)
+            # TODO Visualize scenes with overlapping boxes for validation
             scene_one_list.append(scene_one); scene_two_list.append(scene_two); overlapping_boxes_list.append(overlapping_boxes)
         scene_one, scene_two, overlapping_boxes = torch.stack(scene_one_list), torch.stack(scene_two_list), torch.stack(overlapping_boxes_list)
         scene_one = common_augmentations(scene_one,type_two=False)
@@ -261,7 +262,8 @@ class UVIP(nn.Module):
         concatenated_instances = common_augmentations(concatenated_instances,type_two=False)
         online_proj_instance, _ = self.online_encoder(concatenated_instances)
         online_pred_instance = self.online_predictor(online_proj_instance) # online_pred_instance is of shape (img.shape[0]*self.K_common_instances, online_pred_instance.shape[-1])
-        online_pred_concatenated_instance = online_pred_instance.reshape(img.shape[0], self.K_common_instances*online_pred_instance.shape[-1]) # NOTE restore the batch dimension and concatenate instance representations.
+        online_pred_instance = online_pred_instance.reshape(img.shape[0], self.K_common_instances, online_pred_instance.shape[-1]) # NOTE restore the batch dimension
+        online_pred_concatenated_instance = online_pred_instance.reshape(img.shape[0], self.K_common_instances*online_pred_instance.shape[-1]) # NOTE concatenate instance representations.
         online_concatenated_final_instance_representations = self.instances_to_scene_linear(online_pred_concatenated_instance)
         with torch.no_grad():
             # Pass instances in the overlapping region

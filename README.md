@@ -41,8 +41,10 @@ At the end you will have pkl files with bounding box proposals (filtered for 64 
 
 # TODO
 - Check single gpu train, fix transforms and batch operations
+- Check device settings for distributed training (rank)
 - Check distributed data parallel train
 - Check sinkhorn imp
 - Maybe final BYOL params check
 - Remove any left TODOs
 - Start training.
+- Check max_trials for naive box

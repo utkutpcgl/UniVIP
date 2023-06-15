@@ -20,8 +20,10 @@ class SinkhornDistance(torch.nn.Module):
 
     def forward(self, mu, nu, C):
         # NOTE checked u-a-demander v-b-supplier correspondance from OTA paper.
-        u = torch.ones_like(mu).squeeze(dim=-1) # demander a -> (batch_size, instance numbers K, 1).squeeze(dim=-1)
-        v = torch.ones_like(nu).squeeze(dim=-1) # supplier b -> (batch_size, instance numbers K, 1).squeeze(dim=-1)
+        # mu is demander a -> (batch_size, instance numbers K, 1), nu is supplier b -> (batch_size, instance numbers K, 1) -> you have to squeeze them.
+        mu, nu = mu.squeeze(dim=-1), nu.squeeze(dim=-1) 
+        u = torch.ones_like(mu)
+        v = torch.ones_like(nu)
         # C (batch_size, instance numbers K, instance numbers K)
 
         # Sinkhorn iterations
