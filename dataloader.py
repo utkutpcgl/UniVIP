@@ -7,9 +7,12 @@ import pickle
 from icecream import ic
 import time
 from transforms import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES
+import matplotlib.pyplot as plt
+import random
 
 DEBUG = True
-FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO_proposals/trial/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou_trial_250.pkl'
+ORI_FILTERED_PKL = "/raid/utku/datasets/COCO_dataset/COCO_proposals/final_proposals/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou.pkl"
+TRIAL_FILTERED_PKL = '/raid/utku/datasets/COCO_dataset/COCO_proposals/trial/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou_trial_250.pkl'
 DATASET_PATH = "/raid/utku/datasets/COCO_dataset/train2017/"
 IMAGE_SIZE = 224
 
@@ -32,7 +35,7 @@ def load_pkl(pkl_file):
         raw_data = pickle.load(f)
     return raw_data
 # Load the filtered box proposal pkl files, convert to faster readable form (tensors?)
-FILTERED_PROPOSALS = load_pkl(pkl_file=FILTERED_PKL)
+FILTERED_PROPOSALS = load_pkl(pkl_file=ORI_FILTERED_PKL) # TODO chenge if necessary
 
 class CustomDataset(Dataset):
     def __init__(self, filtered_proposals:dict, image_size=IMAGE_SIZE):
@@ -61,6 +64,12 @@ class CustomDataset(Dataset):
             scene_one, scene_two, concatenated_instances = scene_one.expand(3, -1, -1), scene_two.expand(3, -1, -1), concatenated_instances.expand(K_COMMON_INSTANCES, 3, -1, -1)
         # Return the data in the format you need, for example:
         return (scene_one, scene_two, concatenated_instances)
+    
+    def random_sample(self):
+        # Randomly select an index
+        random_idx = random.randint(0, self.total_sample_count - 1)
+        # Get scene_one, scene_two, concatenated_instances for the randomly selected index
+        return self.__getitem__(random_idx)
 
 
 def init_dataset(batch_size, ddp=False):
@@ -76,3 +85,38 @@ def init_dataset(batch_size, ddp=False):
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     return dataloader, sampler, num_samples
 
+def visualize_scenes(scene_one, scene_two, concatenated_instances, save_path):
+    """
+    Function to visualize scene_one, scene_two and concatenated_instances.
+    scene_one, scene_two: Tensors of shape (C, H, W)
+    concatenated_instances: Tensor of shape (K, C, H, W)
+    """
+
+    # Convert tensors to numpy arrays for visualization
+    scene_one_np = scene_one.permute(1, 2, 0).cpu().numpy()
+    scene_two_np = scene_two.permute(1, 2, 0).cpu().numpy()
+
+    # Plot the scenes
+    plt.figure(figsize=(16, 6))
+
+    plot_img(1, scene_one_np)
+    plt.title('Scene One')
+
+    plot_img(4, scene_two_np)
+    plt.title('Scene Two')
+
+    # Plotting concatenated_instances
+    for count,plt_idx in enumerate([2,3,5,6]):  # Loop through concatenated instances (up to 4)
+        instance = concatenated_instances[count].permute(1, 2, 0).cpu().numpy()
+        plot_img(plt_idx, instance)
+        plt.title(f'Concatenated Instance {plt_idx+1}')
+
+    # Save the plot
+    plt.savefig(save_path)
+    plt.close()
+
+
+def plot_img(idx, img_np):
+    plt.subplot(2, 3, idx)
+    plt.imshow(img_np)
+    plt.axis('off')

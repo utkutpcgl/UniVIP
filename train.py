@@ -13,17 +13,19 @@ from uni_vip import UVIP
 import torch
 from torchvision import models
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from dataloader import init_dataset
+from dataloader import init_dataset, visualize_scenes
 from math import ceil
 
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
-LOG_DIR = Path("logs")
+LOG_DIR = Path("/home/kuartis-dgx1/utku/UniVIP/logs")
 LOG_DIR.mkdir(exist_ok=True)
 LAST_EPOCH_FILE = LOG_DIR/"last_epoch.txt"
+CHECKPOINT_PATH = LOG_DIR/"uni_vip_pretrained_model.pt"
 
 # DDP train settings.
 USE_DDP = False
@@ -32,11 +34,10 @@ WORLD_SIZE = 8 # Number of GPUs for multi gpu training
 
 # was not pretrained by default for ORL also.https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/selfsup/orl/coco/stage3/r50_bs512_ep800.py#L7 
 batch_size = 2
-total_epochs = 800
+total_epochs = 2# TODO 800
 # update momentum every iteration with cosine annealing.
 base_learning_rate = 0.2 # same as ORL.
 final_min_lr = 0 # Here it was said 0, no explicit in univip: https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/selfsup/orl/coco/stage3/r50_bs512_ep800.py#L144
-CHECKPOINT_PATH = "uni_vip_pretrained_model.pt"
 
 # Create DataLoader with the custom dataset and the distributed sampler
 dataloader, sampler, num_samples = init_dataset(batch_size=batch_size, ddp=USE_DDP)
@@ -77,7 +78,7 @@ def train(rank, world_size):
     if USE_DDP:
         model = DDP(model, device_ids=[rank]) # will return ddp model output.
     if rank == DEVICE: # Test logging and model saving.
-        torch.save(model.state_dict(), CHECKPOINT_PATH)
+        torch.save(model.state_dict(), str(CHECKPOINT_PATH))
         # Log the last epoch
         log_text(str(LAST_EPOCH_FILE),"start training")
     # Optimizer and Scheduler
@@ -100,7 +101,8 @@ def train(rank, world_size):
             update_lr(optimizer, lr=lr)
 
         # train for one epoch.
-        for img_data in dataloader:
+        progress_bar = tqdm(dataloader, desc=f"Epoch {cur_epoch+1}/{total_epochs}", position=0, leave=True)
+        for img_data in progress_bar:
             iteration_count+=1
             scene_one, scene_two, concatenated_instances=(item.to(rank) for item in img_data)
             loss = model((scene_one, scene_two, concatenated_instances))
@@ -120,7 +122,7 @@ def train(rank, world_size):
         # save your improved network
         if rank == DEVICE:
             # Therefore, saving it in one process is sufficient.
-            torch.save(model.state_dict(), CHECKPOINT_PATH)
+            torch.save(model.state_dict(), str(CHECKPOINT_PATH))
             # Log the last epoch
             log_text(str(LAST_EPOCH_FILE),cur_epoch)
     
@@ -128,6 +130,11 @@ def train(rank, world_size):
         cleanup() # For multi GPU train.
 
 if __name__ == "__main__":
+    # Randomly sample from the dataset
+    scene_one, scene_two, concatenated_instances = dataloader.dataset.random_sample()
+    # Visualize the scenes
+    visualize_scenes(scene_one, scene_two, concatenated_instances, save_path=str(LOG_DIR/"ss_i_pair.jpg"))
+
     if USE_DDP:
         os.environ['MASTER_ADDR'] = 'localhost'
         os.environ['MASTER_PORT'] = '12355' # set port for communication

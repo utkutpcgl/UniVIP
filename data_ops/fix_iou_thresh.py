@@ -18,7 +18,7 @@ from multiprocessing import Pool
 
 NUM_PROC = 80
 DEBUG = True
-TARGET_PKL = "/home/kuartis-dgx1/utku/UniVIP/COCO_proposals/final_proposals/unlabeled2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors.pkl"
+TARGET_PKL = "/raid/utku/datasets/COCO_dataset/COCO_proposals/final_proposals/unlabeled2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors.pkl"
 IOU_THRESH=0.5
 if not DEBUG:
     ic.disable()

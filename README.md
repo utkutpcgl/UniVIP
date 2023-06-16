@@ -40,12 +40,15 @@ At the end you will have pkl files with bounding box proposals (filtered for 64 
 - I had to change the OS mmap limitation x4 with `sudo sysctl -w vm.max_map_count=<new_value>` (`sudo sysctl -w vm.max_map_count=262120`)
 
 # TODO
-- Check single gpu train, fix transforms and batch operations
 - Check device settings for distributed training (rank)
 - Check distributed data parallel train
+- Remove any left TODOs
+
+# Maybe check
 - Check sinkhorn imp
 - Maybe final BYOL params check
-- Remove any left TODOs
-- Start training.
-- Check max_trials for naive box
-- TODO what form does rand_res_crop rreturn ? important for later code.
+- Check max_trials for naive box (no need?)
+
+# Findings
+
+Instance proposals are not very different sometimes. The paper says that optimal transport applies contrastive learning (pull closer similar images and apart dissimilar ones). But my observations says it only closens similarr representations.

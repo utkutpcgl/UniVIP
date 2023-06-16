@@ -11,7 +11,6 @@ import random
 from naive_box_generation import add_n_random_boxes
 
 DEBUG = True
-FILTERED_PKL = '/home/kuartis-dgx1/utku/UniVIP/COCO_proposals/trial/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou_trial_250.pkl'
 FILTER_SIZE = 64
 K_COMMON_INSTANCES = 4
 
@@ -33,8 +32,6 @@ def load_pkl(pkl_file):
     with open(pkl_file, 'rb') as f:
         raw_data = pickle.load(f)
     return raw_data
-# Load the filtered box proposal pkl files, convert to faster readable form (tensors?)
-FILTERED_PROPOSALS = load_pkl(pkl_file=FILTERED_PKL)
 
 def xywh_to_xyxy(proposal_boxes):
     """
@@ -148,7 +145,6 @@ def get_overlapping_boxes(overlap_region, proposal_boxes):
 
 # 2. If they have at least K_common_instances object regions in the overlapping region T return the scenes s1 and s2 (they are our targets)
 def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_INSTANCES, iters=50):
-    # TODO Visualize scenes with overlapping boxes for validation
     # NOTE we get only K_common_instances boxes and ablations show there is no improvement after 4!!
     """Returns scenes with at least K_common_instances common targets in the overlapping regions. Has to be applied to each image individually (not batch), blocking operations are not parallelizable effectively."""
     best_scenes={"overlapping_boxes":[], "overlap_coord":None, "s1":None, "s2":None}

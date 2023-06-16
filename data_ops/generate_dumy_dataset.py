@@ -8,7 +8,7 @@ from icecream import ic
 import time
 from pathlib import Path
 DEBUG = True
-TARGET_PKL = "/home/kuartis-dgx1/utku/UniVIP/COCO_proposals/final_proposals/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou.pkl"
+TARGET_PKL = "/raid/utku/datasets/COCO_dataset/COCO_proposals/final_proposals/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou.pkl"
 if not DEBUG:
     ic.disable()
 

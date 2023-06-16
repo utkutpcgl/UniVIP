@@ -41,7 +41,7 @@ if __name__ == "__main__":
     # Read the JSON file
     # Load data from pickle file
     
-    TARGET_PKL = "/home/kuartis-dgx1/utku/UniVIP/COCO_proposals/final_proposals/unlabeled2017_selective_search_proposal_enumerated_filtered_96_with_names.pkl"
+    TARGET_PKL = "/raid/utku/datasets/COCO_dataset/COCO_proposals/final_proposals/unlabeled2017_selective_search_proposal_enumerated_filtered_96_with_names.pkl"
     ic("load_pkl")
     raw_data = load_pkl(TARGET_PKL)
     images_box_dict = raw_data["bbox"]
