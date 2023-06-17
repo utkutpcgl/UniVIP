@@ -39,12 +39,7 @@ At the end you will have pkl files with bounding box proposals (filtered for 64 
 
 - I had to change the OS mmap limitation x4 with `sudo sysctl -w vm.max_map_count=<new_value>` (`sudo sysctl -w vm.max_map_count=262120`)
 
-# TODO
-- Check device settings for distributed training (rank)
-- Check distributed data parallel train
-- Remove any left TODOs
-
-# Maybe check
+# Maybe check these
 - Check sinkhorn imp
 - Maybe final BYOL params check
 - Check max_trials for naive box (no need?)

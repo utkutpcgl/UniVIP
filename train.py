@@ -37,7 +37,7 @@ WORLD_SIZE = 8 # Number of GPUs for multi gpu training
 
 # was not pretrained by default for ORL also.https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/selfsup/orl/coco/stage3/r50_bs512_ep800.py#L7 
 batch_size = 64 # for COCO training
-total_epochs = 800 # TODO 800 for COCO and COCO+ training
+total_epochs = 800 # 800 for COCO and COCO+ training
 # update momentum every iteration with cosine annealing.
 base_learning_rate = 0.2 # same as ORL.
 final_min_lr = 0 # Here it was said 0, no explicit in univip: https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/selfsup/orl/coco/stage3/r50_bs512_ep800.py#L144
@@ -70,7 +70,7 @@ def save_model(rank, model, cur_epoch, avg_epoch_loss, writer):
 def ddp_setup(rank, world_size):
     # initialize the process group,  It ensures that every process will be able to coordinate through a master, using the same ip address and port. 
     # nccl backend is currently the fastest and highly recommended backend when using GPUs. This applies to both single-node and multi-node distributed training. https://pytorch.org/docs/master/generated/torch.nn.parallel.DistributedDataParallel.html 
-    # TODO set ,timeout= to avoid any timeout during random box selection (might lose synchronization)
+    # NOTE might set ,timeout= to avoid any timeout during random box selection (might lose synchronization)
     dist.init_process_group(backend='nccl',rank=rank, world_size=world_size) # For multi GPU train.
 
 def cleanup():
@@ -99,9 +99,8 @@ def train_single_epoch(model, dataloader, optimizer, sampler, cosine_scheduler, 
         optimizer.step()
         total_epoch_loss += loss.item()
         # After each step teacher is updated based on BYOL paper.
-        # TODO this part has to be updated, do I have to block the devices before updating the teacher?
-        # if rank==DEVICE: # TODO check this.
-        if USE_DDP: # NOTE can update for every device.
+        # NOTE can update_moving_average for every device, because each device has its own/same copy, hence no need for extra rank block
+        if USE_DDP:
             model.module.update_moving_average(tot_iter=total_iterations,cur_iter=iteration_count)
         else:
             model.update_moving_average(tot_iter=total_iterations,cur_iter=iteration_count)
@@ -146,7 +145,7 @@ def train_setup(rank, world_size):
         # save your improved network
         if rank == DEVICE:
             save_model(rank, model=model, cur_epoch=cur_epoch, avg_epoch_loss=avg_epoch_loss, writer=writer)
-            # TODO I might have to block other ranks here?
+            # NOTE I dont have to block here because backward pass synchronizes each rank/gpu process
     if USE_DDP:
         cleanup() # For multi GPU train.
 

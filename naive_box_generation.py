@@ -28,15 +28,14 @@ def get_max_iou(filtered_boxes: Tensor, candidate_box: Tensor) -> Tensor:
     iou = inters / uni
     return 0 if iou.numel() == 0 else torch.max(iou)
 
-def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio=3, iou_threshold=0.5, max_trials=30):
+def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio=3, iou_threshold=0.5, max_trials=100):
     """overlap_coord is (x1,y1,x2,y2), overlapping_boxes is (x,y,w,h)
     Generate random x,y,w,h uniformly in the allowed ranges.
-    NOTE Might introduce worse results -> 
-    after some iterations neglect the iou rule to avoid being stuck.
+    NOTE max_trials might introduce worse results ->  after some iterations neglect the iou rule to avoid being stuck.
     """
     iou = 1
     trial_count = 0 
-    while iou>iou_threshold: #  and trial_count<max_trials
+    while iou>iou_threshold and trial_count<max_trials:
         # Generate w
         (o_x1,o_y1,o_x2,o_y2)=overlap_coord
         max_width, max_height = o_x2-o_x1, o_y2-o_y1
