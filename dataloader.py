@@ -6,7 +6,7 @@ import torchvision.io as io
 import pickle
 from icecream import ic
 import time
-from transforms import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES
+from transforms import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES, common_augmentations
 import matplotlib.pyplot as plt
 import random
 
@@ -34,8 +34,7 @@ def load_pkl(pkl_file):
     with open(pkl_file, 'rb') as f:
         raw_data = pickle.load(f)
     return raw_data
-# Load the filtered box proposal pkl files, convert to faster readable form (tensors?)
-FILTERED_PROPOSALS = load_pkl(pkl_file=ORI_FILTERED_PKL) # TODO chenge if necessary
+
 
 class CustomDataset(Dataset):
     def __init__(self, filtered_proposals:dict, image_size=IMAGE_SIZE):
@@ -58,11 +57,17 @@ class CustomDataset(Dataset):
         img = io.read_image(img_path)/255 # convert to 0-1 float32
         # NOTE feeding non-normalized float image values to ColorJitter clamps all values to max(x,1.0)!!!
         
+        # NOTE Would be faster in GPU probably, worth to try later.
         scene_one, scene_two, overlapping_boxes = select_scenes(img=img,proposal_boxes=proposal_boxes,image_size=self.image_size) # return scene_one, scene_two, overlapping_boxes
+        scene_one, scene_two, overlapping_boxes = scene_one.to("cuda"), scene_two.to("cuda"), overlapping_boxes.to("cuda")
         concatenated_instances = get_concatenated_instances(img, overlapping_boxes)
         if scene_one.shape[0] == 1:
             scene_one, scene_two, concatenated_instances = scene_one.expand(3, -1, -1), scene_two.expand(3, -1, -1), concatenated_instances.expand(K_COMMON_INSTANCES, 3, -1, -1)
-        # Return the data in the format you need, for example:
+        
+        # scene_one = common_augmentations(scene_one,type_two=False)
+        # scene_two = common_augmentations(scene_two,type_two=True)
+        # concatenated_instances = common_augmentations(concatenated_instances,type_two=False)
+        scene_one, scene_two, overlapping_boxes = scene_one.to("cpu"), scene_two.to("cpu"), overlapping_boxes.to("cpu")
         return (scene_one, scene_two, concatenated_instances)
     
     def random_sample(self):
@@ -73,14 +78,19 @@ class CustomDataset(Dataset):
 
 
 def init_dataset(batch_size, ddp=False):
+    # Load the filtered box proposal pkl files, convert to faster readable form (tensors?)
+    ic("load proposals to memory")
+    FILTERED_PROPOSALS = load_pkl(pkl_file=ORI_FILTERED_PKL) # TODO chenge if necessary
     # Initialize your dataset
     dataset = CustomDataset(FILTERED_PROPOSALS)
     num_samples = len(dataset)
     sampler = None
     if ddp:
         # Initialize DistributedSampler
-        sampler = DistributedSampler(dataset)
-        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler,shuffle=True)
+        # https://discuss.pytorch.org/t/distributedsampler/90205/2?u=utku_mert_topcuoglu
+        # https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
+        sampler = DistributedSampler(dataset, shuffle=True) # Basically random sampler for distributed training.
+        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler) # sampler or shuffle.
     else:
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     return dataloader, sampler, num_samples
@@ -120,3 +130,9 @@ def plot_img(idx, img_np):
     plt.subplot(2, 3, idx)
     plt.imshow(img_np)
     plt.axis('off')
+
+def vis_some_samples(samle_num, dataloader, log_dir):
+    for i in range(samle_num):
+        scene_one, scene_two, concatenated_instances = dataloader.dataset.random_sample()
+        vis_path = log_dir/"vis";vis_path.mkdir(exist_ok=True)
+        visualize_scenes(scene_one, scene_two, concatenated_instances, save_path=str(vis_path/f"ss_i_pair_{i}.jpg"))

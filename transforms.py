@@ -76,29 +76,21 @@ def crop_scene(image, image_size):
     return image, (top, left, height, width)
 
 def common_augmentations(image, type_two = False):
-    rand_hor_flip = T.RandomHorizontalFlip(p=0.5)
-    image = rand_hor_flip(image)
-
+    """Could not use Compose with transformations due to RandomApply requirement."""
+    image = T.RandomHorizontalFlip(p=0.5)(image)
     # since the order has to change (with randperm i get_params) I must use ColorJitter below.
-    col_jit = RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)
-    image = col_jit(image)
-
+    image = RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)(image)
     # Apply grayscale with probability 0.2
     image = T.RandomGrayscale(p=0.2)(image)
-
     # Apply gaussian blur with probability 0.2
     gaussian_prob = 0.1 if type_two else 1 # 1 for type_one
-    gaus_blur = RandomApply(T.GaussianBlur((23, 23)), p = gaussian_prob)
-    image = gaus_blur(image)
-
+    image = RandomApply(T.GaussianBlur((23, 23)), p = gaussian_prob)(image)
     solarize_prob = 0.2 if type_two else 0 # assymetric augm
     solarize_threshold = 0.5
-    solarize = T.RandomSolarize(threshold=solarize_threshold, p=solarize_prob)
-    image = solarize(image)
+    image = T.RandomSolarize(threshold=solarize_threshold, p=solarize_prob)(image)
     # NOTE toTensor not necessary because images are read with torchvision.io.read()
     # They apply normalization (not explicit in the paper: https://github.com/lucidrains/byol-pytorch/issues/4#issue-641183816)
-    norm = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))
-    image = norm(image)
+    image = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))(image)
     return image
 
 
@@ -181,12 +173,12 @@ def get_concatenated_instances(img, overlapping_boxes):
     num_boxes = overlapping_boxes.size(1)
     
     # Create batch indices to be concatenated with boxes -> (batch_size*K), each box will have an index (showing where it belongs)
-    batch_indices = torch.arange(img.size(0)).view(-1, 1).repeat(1, num_boxes).view(-1, 1)
+    batch_indices = torch.arange(img.size(0)).view(-1, 1).repeat(1, num_boxes).view(-1, 1).to(img)
     
     # Reshape boxes for roi_align
     boxes = overlapping_boxes.view(-1, 4) # Collect total number of boxes in the first dim (batch_size*K)
     # NOTE for roi_align to work, overlapping boxes has to be converted to xyxy format.
-    boxes = xywh_to_xyxy(boxes)
+    boxes = xywh_to_xyxy(boxes).to(img)
     
     # Concatenate batch indices with boxes, index shows which image in a batch each box belongs
     boxes_with_indices = torch.cat([batch_indices, boxes], dim=1).to(img)
