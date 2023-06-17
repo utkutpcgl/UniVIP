@@ -80,7 +80,8 @@ class CustomDataset(Dataset):
 def init_dataset(batch_size, ddp=False):
     # Load the filtered box proposal pkl files, convert to faster readable form (tensors?)
     ic("load proposals to memory")
-    FILTERED_PROPOSALS = load_pkl(pkl_file=ORI_FILTERED_PKL) # TODO chenge if necessary
+    FILTERED_PROPOSALS = load_pkl(pkl_file=ORI_FILTERED_PKL) # TODO chenge if necessary, TRIAL_FILTERED_PKL or ORI_FILTERED_PKL
+
     # Initialize your dataset
     dataset = CustomDataset(FILTERED_PROPOSALS)
     num_samples = len(dataset)

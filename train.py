@@ -28,7 +28,7 @@ LOG_DIR.mkdir(exist_ok=True)
 LAST_EPOCH_FILE = LOG_DIR/"last_epoch.txt"
 CHECKPOINT_PATH = LOG_DIR/"uni_vip_pretrained_model.pt"
 VISUALIZE_SAMPLE_NUM = 20
-VISUALIZE = False
+VISUALIZE = True
 
 # DDP train settings.
 USE_DDP = True
@@ -36,7 +36,7 @@ DEVICE = 0 # Device for single gpu training
 WORLD_SIZE = 8 # Number of GPUs for multi gpu training
 
 # was not pretrained by default for ORL also.https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/selfsup/orl/coco/stage3/r50_bs512_ep800.py#L7 
-batch_size = 64 # for COCO training
+batch_size = 64 # 512 for COCO training
 total_epochs = 800 # 800 for COCO and COCO+ training
 # update momentum every iteration with cosine annealing.
 base_learning_rate = 0.2 # same as ORL.
