@@ -34,9 +34,9 @@ def get_max_iou_tensorized(filtered_boxes: Tensor, candidate_boxes: Tensor) -> T
 
     # 4. calculate the overlaps and find the max overlap between filtered_boxes and candidate_box
     iou = inters / uni
-    return torch.max(iou, dim=0).values
+    return None if iou.numel() == 0 else torch.max(iou, dim=0).values
 
-def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio=3, iou_threshold=0.5, max_trials=100):
+def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio=3, iou_threshold=0.5, max_trials=200):
     """overlap_coord is (x1,y1,x2,y2), overlapping_boxes is (x,y,w,h)
     max_ratio has to be >1 version of the ratio.
     Generate random x,y,w,h uniformly in the allowed ranges.
@@ -65,14 +65,16 @@ def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio
 
     # Calculate IoUs for all boxes
     ious = get_max_iou_tensorized(overlapping_boxes, random_boxes)
-
-    # Select a box with an IoU less than iou_threshold if exists, otherwise select the one with the least IoU
-    acceptable_indices = torch.where(ious < iou_threshold)[0]
-    if acceptable_indices.numel() > 0:
-        random_box = random_boxes[acceptable_indices[0]]
+    if ious is None:
+        random_box = random_boxes[0]
     else:
-        least_iou_index = torch.argmin(ious)
-        random_box = random_boxes[least_iou_index]
+        # Select a box with an IoU less than iou_threshold if exists, otherwise select the one with the least IoU
+        acceptable_indices = torch.where(ious < iou_threshold)[0]
+        if acceptable_indices.numel() > 0:
+            random_box = random_boxes[acceptable_indices[0]]
+        else:
+            least_iou_index = torch.argmin(ious)
+            random_box = random_boxes[least_iou_index]
     return random_box
 
 def add_n_random_boxes(overlap_coord,overlapping_boxes,n_random_boxes):
