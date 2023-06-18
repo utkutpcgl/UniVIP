@@ -74,7 +74,7 @@ class CustomDataset(Dataset):
         # scene_one = common_augmentations(scene_one,type_two=False)
         # scene_two = common_augmentations(scene_two,type_two=True)
         # concatenated_instances = common_augmentations(concatenated_instances,type_two=False)
-        # scene_one, scene_two, overlapping_boxes = scene_one.to("cpu"), scene_two.to("cpu"), overlapping_boxes.to("cpu")
+        scene_one, scene_two, overlapping_boxes = scene_one.to("cpu"), scene_two.to("cpu"), overlapping_boxes.to("cpu")
         return (scene_one, scene_two, concatenated_instances)
     
     def random_sample(self):
@@ -100,7 +100,7 @@ def init_dataset(batch_size, ddp=False):
         sampler = DistributedSampler(dataset, shuffle=True) # Basically random sampler for distributed training.
         dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=4) # sampler or shuffle.
     else:
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     return dataloader, sampler, num_samples
 
 def visualize_scenes(scene_one, scene_two, concatenated_instances, save_path):

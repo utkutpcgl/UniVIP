@@ -124,7 +124,8 @@ class NetWrapper(nn.Module):
         _ = self.net(x)
         hidden = self.hidden[x.device]
         self.hidden.clear()
-
+        
+        assert not hidden.isnan().any(), "encoders produce nan values"
         assert hidden is not None, f'hidden layer {self.layer} never emitted an output'
         return hidden
 
@@ -170,9 +171,9 @@ class UVIP(nn.Module):
         device = get_module_device(net)
         self.to(device)
 
-        # send a mock image tensor to instantiate singleton parameters # NOTE batch size 1 gives error.
-        dummy_data = (*torch.rand(size=(2, 2, 3, image_size, image_size), device=device),torch.rand(size=(2, 4, 3, image_size, image_size), device=device))
-        self.forward(dummy_data)
+        # # send a mock image tensor to instantiate singleton parameters # NOTE batch size 1 gives error.
+        # dummy_data = (*torch.rand(size=(2, 2, 3, image_size, image_size), device=device),torch.rand(size=(2, 4, 3, image_size, image_size), device=device))
+        # self.forward(dummy_data)
     
 
     @singleton('target_encoder')
@@ -240,6 +241,7 @@ class UVIP(nn.Module):
         scene_two = common_augmentations(scene_two,type_two=True)
         concatenated_instances = concatenated_instances.view(batch_size*self.K_common_instances,*concatenated_instances.shape[2:]) # Squeezed along batch dim to (b*K, c, 96, 96)
         concatenated_instances = common_augmentations(concatenated_instances,type_two=False)
+        assert not (scene_one.isnan().any() or scene_two.isnan().any() or concatenated_instances.isnan().any()), "inputs have NaN values."
         
         with torch.no_grad():
             target_encoder = self._get_target_encoder()

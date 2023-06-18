@@ -39,7 +39,7 @@ WORLD_SIZE = 8 # Number of GPUs for multi gpu training
 batch_size = 64 # 512 for COCO training
 total_epochs = 800 # 800 for COCO and COCO+ training
 # update momentum every iteration with cosine annealing.
-base_learning_rate = 0.2 # same as ORL.
+base_learning_rate = 0.0 # same as ORL.
 final_min_lr = 0 # Here it was said 0, no explicit in univip: https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/selfsup/orl/coco/stage3/r50_bs512_ep800.py#L144
 
 
@@ -112,7 +112,7 @@ def train_setup(rank, world_size):
     global_current_iteration=0
     # warmup
     warm_up_epochs = 4
-    warm_up_iters = iters_per_epoch*total_epochs
+    warm_up_iters = iters_per_epoch*warm_up_epochs
     warm_up_lrs = [iter*base_learning_rate/warm_up_iters for iter in range(warm_up_iters)] # increase linearly
 
     # Create the model.

@@ -72,14 +72,15 @@ def crop_scene(image, image_size):
     top, left, height, width = rand_res_crop.get_params(image, rand_res_crop.scale, rand_res_crop.ratio)
     # if size is int (not list) smaller edge will be scaled to match this.
     # byol uses bicubic interpolation.
-    image = TF.resized_crop(image, top, left, height, width, size=(image_size,  image_size), interpolation=TF.InterpolationMode.BICUBIC) # If necessary .clamp(min=0, max=1)
+    image = TF.resized_crop(image, top, left, height, width, size=(image_size,  image_size), interpolation=TF.InterpolationMode.BICUBIC).clamp(min=0, max=1)
     return image, (top, left, height, width)
 
 def common_augmentations(image, type_two = False):
     """Could not use Compose with transformations due to RandomApply requirement."""
     image = T.RandomHorizontalFlip(p=0.5)(image)
     # since the order has to change (with randperm i get_params) I must use ColorJitter below.
-    image = RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)(image)
+    image = T.ColorJitter(0.4, 0.4, 0.2, 0.1)(image)
+    image = RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)(image) # NOTE color jitter produces NaN values if the input image is not between 0-1.
     # Apply grayscale with probability 0.2
     image = T.RandomGrayscale(p=0.2)(image)
     # Apply gaussian blur with probability 0.2
