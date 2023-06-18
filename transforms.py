@@ -96,7 +96,7 @@ def common_augmentations(image, type_two = False):
 
 # 1. Get scene overlaps given the coordinates
 def get_scene_overlap(crop_coordinates_one, crop_coordinates_two):
-    min_overlap_size = FILTER_SIZE*3/2 # filter scenes with too small overlap , NOTE might cause difference with original paper
+    # min_overlap_size = FILTER_SIZE*3/2 # filter scenes with too small overlap , NOTE might cause difference with original paper
     """ crop_coordinates are in t,l,h,w form (https://pytorch.org/vision/main/generated/torchvision.transforms.RandomResizedCrop.html)
     return scene as (x1, y1, x2, y2)"""
     def tlhw_to_xyxy_single(t,l,h,w):
@@ -117,7 +117,8 @@ def get_scene_overlap(crop_coordinates_one, crop_coordinates_two):
     coord_one = tlhw_to_xyxy_single(*crop_coordinates_one)
     coord_two = tlhw_to_xyxy_single(*crop_coordinates_two)
     (x1, y1, x2, y2) = get_overlap(coord_one, coord_two)
-    return None if (x2 - x1 < min_overlap_size or y2 - y1 < min_overlap_size) else (x1, y1, x2, y2)
+    # NOTE ideally you want: return None if (x2 - x1 < min_overlap_size or y2 - y1 < min_overlap_size) else (x1, y1, x2, y2)
+    return None if (x2==x1 or y2==y1) else (x1, y1, x2, y2)
 
 
 def check_box_in_region(overlap_region, proposal_boxes):
@@ -136,7 +137,7 @@ def get_overlapping_boxes(overlap_region, proposal_boxes):
 
 
 # 2. If they have at least K_common_instances object regions in the overlapping region T return the scenes s1 and s2 (they are our targets)
-def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_INSTANCES, iters=50):
+def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_INSTANCES, iters=20):
     # NOTE we get only K_common_instances boxes and ablations show there is no improvement after 4!!
     """Returns scenes with at least K_common_instances common targets in the overlapping regions. Has to be applied to each image individually (not batch), blocking operations are not parallelizable effectively."""
     best_scenes={"overlapping_boxes":[], "overlap_coord":None, "s1":None, "s2":None}
@@ -145,7 +146,7 @@ def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_I
         scene_one, crop_coordinates_one  = crop_scene(img, image_size)
         scene_two, crop_coordinates_two = crop_scene(img, image_size)
         overlap_coord = get_scene_overlap(crop_coordinates_one, crop_coordinates_two)
-        if overlap_coord is None: # Check there is a large enough overlap
+        if overlap_coord is None: # Check there is a non-zero overlap
             continue
         # now check K_common_instances common instances.
         overlapping_boxes = get_overlapping_boxes(overlap_region=overlap_coord, proposal_boxes=proposal_boxes)

@@ -36,21 +36,24 @@ def get_max_iou_tensorized(filtered_boxes: Tensor, candidate_boxes: Tensor) -> T
     iou = inters / uni
     return None if iou.numel() == 0 else torch.max(iou, dim=0).values
 
-def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio=3, iou_threshold=0.5, max_trials=200):
+def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio=3, iou_threshold=0.5, max_trials=100):
     """overlap_coord is (x1,y1,x2,y2), overlapping_boxes is (x,y,w,h)
+    NOTE this is not perfectly possible as some images <64 edges.
+    NOTE Hence max_trials is required but might introduce worse results ->  after some iterations neglect the iou rule to avoid being stuck.
     max_ratio has to be >1 version of the ratio.
     Generate random x,y,w,h uniformly in the allowed ranges.
-    NOTE max_trials might introduce worse results ->  after some iterations neglect the iou rule to avoid being stuck.
+    iou_thresh, max_ratio and min_size as given.
     """
     device = overlapping_boxes.device
     overlapping_boxes= overlapping_boxes.to("cpu")
     (o_x1,o_y1,o_x2,o_y2)=overlap_coord
     max_width, max_height = o_x2-o_x1, o_y2-o_y1
+    min_size = min(min(min_size, max_width), max_height) # The max values might be smaller than min_size.
 
-    # Generate 100 random boxes
+    # Generate max_trials random boxes
     # generate width uniformly between min_size and max_width
     widths = np.random.randint(min_size, max_width + 1, max_trials)
-    # generate hieght uniformly between max(min_size,width/max_ratio) and min(max_height,widht*max_ratio)
+    # generate heights  uniformly between max(min_size,width/max_ratio) and min(max_height,widht*max_ratio)
     min_heights = np.maximum(min_size, widths / max_ratio)
     max_heights = np.minimum(max_height, widths * max_ratio)
 
