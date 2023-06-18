@@ -6,10 +6,9 @@ import torchvision.io as io
 import pickle
 from icecream import ic
 import time
-from transforms import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES, common_augmentations
+from transforms import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES
 import matplotlib.pyplot as plt
 import random
-from pathlib import Path
 
 DEBUG = True
 ORI_FILTERED_PKL = "/raid/utku/datasets/COCO_dataset/COCO_proposals/final_proposals/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou.pkl"
@@ -71,10 +70,7 @@ class CustomDataset(Dataset):
         if scene_one.shape[0] == 1:
             scene_one, scene_two, concatenated_instances = scene_one.expand(3, -1, -1), scene_two.expand(3, -1, -1), concatenated_instances.expand(K_COMMON_INSTANCES, 3, -1, -1)
         
-        # scene_one = common_augmentations(scene_one,type_two=False)
-        # scene_two = common_augmentations(scene_two,type_two=True)
-        # concatenated_instances = common_augmentations(concatenated_instances,type_two=False)
-        scene_one, scene_two, overlapping_boxes = scene_one.to("cpu"), scene_two.to("cpu"), overlapping_boxes.to("cpu")
+        # scene_one, scene_two, overlapping_boxes = scene_one.to("cpu"), scene_two.to("cpu"), overlapping_boxes.to("cpu")
         return (scene_one, scene_two, concatenated_instances)
     
     def random_sample(self):
@@ -98,7 +94,7 @@ def init_dataset(batch_size, ddp=False):
         # https://discuss.pytorch.org/t/distributedsampler/90205/2?u=utku_mert_topcuoglu
         # https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
         sampler = DistributedSampler(dataset, shuffle=True) # Basically random sampler for distributed training.
-        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=4) # sampler or shuffle.
+        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=8) # sampler or shuffle.
     else:
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     return dataloader, sampler, num_samples
