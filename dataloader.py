@@ -91,9 +91,9 @@ def init_dataset(batch_size, ddp=False):
         # https://discuss.pytorch.org/t/distributedsampler/90205/2?u=utku_mert_topcuoglu
         # https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
         sampler = DistributedSampler(dataset, shuffle=True) # Basically random sampler for distributed training.
-        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler) # sampler or shuffle.
+        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=4, pin_memory=True) # sampler or shuffle.
     else:
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
     return dataloader, sampler, num_samples
 
 def visualize_scenes(scene_one, scene_two, concatenated_instances, save_path):
