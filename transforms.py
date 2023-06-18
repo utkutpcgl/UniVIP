@@ -146,7 +146,7 @@ def select_scenes(img, proposal_boxes, image_size, K_common_instances=K_COMMON_I
         scene_one, crop_coordinates_one  = crop_scene(img, image_size)
         scene_two, crop_coordinates_two = crop_scene(img, image_size)
         overlap_coord = get_scene_overlap(crop_coordinates_one, crop_coordinates_two)
-        if overlap_coord is None: # Check there is a non-zero overlap
+        if overlap_coord is None: # Check there is a large enough overlap
             continue
         # now check K_common_instances common instances.
         overlapping_boxes = get_overlapping_boxes(overlap_region=overlap_coord, proposal_boxes=proposal_boxes)

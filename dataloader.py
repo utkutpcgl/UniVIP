@@ -9,12 +9,14 @@ import time
 from transforms import select_scenes, get_concatenated_instances, K_COMMON_INSTANCES, common_augmentations
 import matplotlib.pyplot as plt
 import random
+from pathlib import Path
 
 DEBUG = True
 ORI_FILTERED_PKL = "/raid/utku/datasets/COCO_dataset/COCO_proposals/final_proposals/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou.pkl"
 TRIAL_FILTERED_PKL = '/raid/utku/datasets/COCO_dataset/COCO_proposals/trial/train2017_selective_search_proposal_enumerated_filtered_64_with_names_with_tensors_fixed_iou_trial_250.pkl'
 DATASET_PATH = "/raid/utku/datasets/COCO_dataset/train2017/"
 IMAGE_SIZE = 224
+SMALL_IMGS = ['000000187714.jpg', '000000363747.jpg']
 
 if not DEBUG:
     ic.disable()
@@ -38,8 +40,11 @@ def load_pkl(pkl_file):
 
 class CustomDataset(Dataset):
     def __init__(self, filtered_proposals:dict, image_size=IMAGE_SIZE):
-        self.filtered_proposals = list(filtered_proposals["bbox"].items())
-        self.total_sample_count=len(self.filtered_proposals)
+        filtered_proposals_bbox = filtered_proposals["bbox"]
+        for small_img in SMALL_IMGS: # Remove small images (below 64)
+            del filtered_proposals_bbox[small_img]
+        self.filtered_proposals_bbox = list(filtered_proposals_bbox.items())
+        self.total_sample_count=len(self.filtered_proposals_bbox)
         self.image_size=image_size
         scene_one, _, concatenated_instances = self.__getitem__(0)
         assert scene_one.dtype == torch.float32 
@@ -51,7 +56,9 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         # Load your data here using the idx
-        img_name, proposal_boxes = self.filtered_proposals[idx] 
+        worker_info = torch.utils.data.get_worker_info()
+        worker_id = 0 if worker_info is None else worker_info.id # NOTE To reduce load to different gpus and increase num of workers
+        img_name, proposal_boxes = self.filtered_proposals_bbox[idx] 
         img_path = DATASET_PATH + img_name
         # Load the image using torchvision's read_image, reads int8 (cv2 also reads so)
         img = io.read_image(img_path)/255 # convert to 0-1 float32
@@ -59,7 +66,7 @@ class CustomDataset(Dataset):
         
         # NOTE Would be faster in GPU probably, worth to try later.
         scene_one, scene_two, overlapping_boxes = select_scenes(img=img,proposal_boxes=proposal_boxes,image_size=self.image_size) # return scene_one, scene_two, overlapping_boxes
-        scene_one, scene_two, overlapping_boxes = scene_one.to("cuda"), scene_two.to("cuda"), overlapping_boxes.to("cuda")
+        scene_one, scene_two, overlapping_boxes = scene_one.to(worker_id), scene_two.to(worker_id), overlapping_boxes.to(worker_id)
         concatenated_instances = get_concatenated_instances(img, overlapping_boxes)
         if scene_one.shape[0] == 1:
             scene_one, scene_two, concatenated_instances = scene_one.expand(3, -1, -1), scene_two.expand(3, -1, -1), concatenated_instances.expand(K_COMMON_INSTANCES, 3, -1, -1)
@@ -67,7 +74,7 @@ class CustomDataset(Dataset):
         # scene_one = common_augmentations(scene_one,type_two=False)
         # scene_two = common_augmentations(scene_two,type_two=True)
         # concatenated_instances = common_augmentations(concatenated_instances,type_two=False)
-        scene_one, scene_two, overlapping_boxes = scene_one.to("cpu"), scene_two.to("cpu"), overlapping_boxes.to("cpu")
+        # scene_one, scene_two, overlapping_boxes = scene_one.to("cpu"), scene_two.to("cpu"), overlapping_boxes.to("cpu")
         return (scene_one, scene_two, concatenated_instances)
     
     def random_sample(self):
@@ -91,9 +98,9 @@ def init_dataset(batch_size, ddp=False):
         # https://discuss.pytorch.org/t/distributedsampler/90205/2?u=utku_mert_topcuoglu
         # https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler
         sampler = DistributedSampler(dataset, shuffle=True) # Basically random sampler for distributed training.
-        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=4, pin_memory=True) # sampler or shuffle.
+        dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, num_workers=4) # sampler or shuffle.
     else:
-        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=4)
     return dataloader, sampler, num_samples
 
 def visualize_scenes(scene_one, scene_two, concatenated_instances, save_path):

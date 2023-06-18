@@ -47,3 +47,9 @@ At the end you will have pkl files with bounding box proposals (filtered for 64 
 # Findings
 
 Instance proposals are not very different sometimes. The paper says that optimal transport applies contrastive learning (pull closer similar images and apart dissimilar ones). But my observations says it only closens similarr representations.
+
+
+# Difficulties
+Number of images with edge smaller than 64: 2
+Number of images with edge smaller than 70: 2
+smaller_files are [PosixPath('/raid/utku/datasets/COCO_dataset/train2017/000000187714.jpg'), PosixPath('/raid/utku/datasets/COCO_dataset/train2017/000000363747.jpg')]

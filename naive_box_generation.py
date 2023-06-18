@@ -38,8 +38,8 @@ def get_max_iou_tensorized(filtered_boxes: Tensor, candidate_boxes: Tensor) -> T
 
 def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio=3, iou_threshold=0.5, max_trials=100):
     """overlap_coord is (x1,y1,x2,y2), overlapping_boxes is (x,y,w,h)
-    NOTE this is not perfectly possible as some images <64 edges.
-    NOTE Hence max_trials is required but might introduce worse results ->  after some iterations neglect the iou rule to avoid being stuck.
+    NOTE Removed imags with smaller edges than 64.
+    NOTE max_trials might introduce worse results ->  after some iterations neglect the iou rule to avoid being stuck.
     max_ratio has to be >1 version of the ratio.
     Generate random x,y,w,h uniformly in the allowed ranges.
     iou_thresh, max_ratio and min_size as given.
@@ -56,6 +56,7 @@ def generate_random_box(overlap_coord, overlapping_boxes, min_size=64, max_ratio
     # generate heights  uniformly between max(min_size,width/max_ratio) and min(max_height,widht*max_ratio)
     min_heights = np.maximum(min_size, widths / max_ratio)
     max_heights = np.minimum(max_height, widths * max_ratio)
+    min_heights = np.minimum(min_heights, max_heights) # has to be smaller than max_heights
 
     heights = np.random.randint(min_heights, max_heights + 1, max_trials)
     # generate random x1 and y1 uniformly (top-left coordinates) such that o_x1<=x1 and x1+width<=o_x2 and o_y1<=y1 and y1+height<o_y

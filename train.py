@@ -28,7 +28,7 @@ LOG_DIR.mkdir(exist_ok=True)
 LAST_EPOCH_FILE = LOG_DIR/"last_epoch.txt"
 CHECKPOINT_PATH = LOG_DIR/"uni_vip_pretrained_model.pt"
 VISUALIZE_SAMPLE_NUM = 20
-VISUALIZE = True
+VISUALIZE = False
 
 # DDP train settings.
 USE_DDP = True
@@ -77,39 +77,29 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def train_single_epoch(model, dataloader, optimizer, sampler, cosine_scheduler, cur_epoch, total_iterations, iteration_count, warm_up_epochs, warm_up_lrs, rank):
-    # Global variables
-    total_epoch_loss = 0
-    # Shuffle data at the beginning of each epoch
-    if USE_DDP:
-        sampler.set_epoch(epoch=cur_epoch) # to ensure that the distributed sampler shuffles the data differently at the beginning of each epoch
-    # Warmup first epochs.
-    if cur_epoch < warm_up_epochs:
-        lr = warm_up_lrs[cur_epoch]
-        update_lr(optimizer, lr=lr)
-
+def train_single_epoch(model, progress_bar, optimizer, total_iterations, global_current_iteration, warm_up_iters, warm_up_lrs, rank):
+    epoch_loss = 0
     # train for one epoch.
-    progress_bar = tqdm(dataloader, desc=f"Epoch {cur_epoch+1}/{total_epochs}", position=0, leave=True) if rank==DEVICE else dataloader
     for img_data in progress_bar:
-        iteration_count+=1
+        # Warmup first epochs.
+        if global_current_iteration < warm_up_iters:
+            lr = warm_up_lrs[global_current_iteration]
+            update_lr(optimizer, lr=lr)
+        global_current_iteration+=1
         scene_one, scene_two, concatenated_instances=(item.to(rank) for item in img_data)
         loss = model((scene_one, scene_two, concatenated_instances))
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        total_epoch_loss += loss.item()
+        epoch_loss += loss.item()
         # After each step teacher is updated based on BYOL paper.
         # NOTE can update_moving_average for every device, because each device has its own/same copy, hence no need for extra rank block
         if USE_DDP:
-            model.module.update_moving_average(tot_iter=total_iterations,cur_iter=iteration_count)
+            model.module.update_moving_average(tot_iter=total_iterations,cur_iter=global_current_iteration)
         else:
-            model.update_moving_average(tot_iter=total_iterations,cur_iter=iteration_count)
-    # Cosine scheduler after some steps.
-    if cur_epoch >= warm_up_epochs:
-        cosine_scheduler.step(epoch=cur_epoch-warm_up_epochs)
+            model.update_moving_average(tot_iter=total_iterations,cur_iter=global_current_iteration)
     # Log the loss
-    avg_epoch_loss = total_epoch_loss/total_iterations
-    return model, avg_epoch_loss
+    return model, epoch_loss, global_current_iteration
     
 
 def train_setup(rank, world_size):
@@ -117,13 +107,18 @@ def train_setup(rank, world_size):
         ddp_setup(rank=rank, world_size=world_size)
     # Create DataLoader with the custom dataset and the distributed sampler
     dataloader, sampler, num_samples = init_dataset(batch_size=batch_size, ddp=USE_DDP)
-    total_iterations = ceil(num_samples / batch_size)*total_epochs 
-    iteration_count=0
+    iters_per_epoch = ceil(num_samples / batch_size)
+    total_iterations = iters_per_epoch*total_epochs 
+    global_current_iteration=0
+    # warmup
+    warm_up_epochs = 4
+    warm_up_iters = iters_per_epoch*total_epochs
+    warm_up_lrs = [iter*base_learning_rate/warm_up_iters for iter in range(warm_up_iters)] # increase linearly
 
     # Create the model.
     resnet = models.resnet50(weights=None).to(rank)
     model = UVIP(resnet).to(rank)
-    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model) # Not sure if UniVIP does this.
+    # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model) # Not sure if UniVIP does this.
     # NOTE To let a non-DDP model load a state dict from a DDP model, consume_prefix_in_state_dict_if_present() needs to be applied to strip the prefix “module.” in the DDP state dict before loading.
     if USE_DDP:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True) # will return ddp model output.
@@ -133,19 +128,22 @@ def train_setup(rank, world_size):
         # save_model(rank,model=model,cur_epoch=0, avg_epoch_loss=0, writer=writer)
     # Optimizer and Scheduler
     optimizer = torch.optim.SGD(model.parameters(), weight_decay=0.0001, momentum=0.9, lr=base_learning_rate)
-    # Warmup and schedulers
-    warm_up_epochs = 4
-    warm_up_lrs = [base_learning_rate/(warm_up_epochs-cur_epoch) for cur_epoch in range(warm_up_epochs)]
-    # NOTE Do not apply cosine for the first warm_up_epochs, otherwise collides with warmup. First step considers base_lr not the current lr of the optimizer. Look here: https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html#CosineAnnealingLR:~:text=elif%20self._step_count,optimizer.param_groups)%5D
     cosine_scheduler = CosineAnnealingLR(optimizer=optimizer, T_max=total_epochs-warm_up_epochs, eta_min=final_min_lr)
 
     # Training epochs.
     for cur_epoch in range(total_epochs):
-        model, avg_epoch_loss = train_single_epoch(model, dataloader, optimizer, sampler, cosine_scheduler, cur_epoch, total_iterations, iteration_count, warm_up_epochs, warm_up_lrs, rank)
-        # save your improved network
-        if rank == DEVICE:
-            save_model(rank, model=model, cur_epoch=cur_epoch, avg_epoch_loss=avg_epoch_loss, writer=writer)
+        # Shuffle data at the beginning of each epoch
+        if USE_DDP:
+            sampler.set_epoch(epoch=cur_epoch) # to ensure that the distributed sampler shuffles the data differently at the beginning of each epoch
+        progress_bar = tqdm(dataloader, desc=f"Epoch {cur_epoch+1}/{total_epochs}", position=0, leave=True) if rank==DEVICE else dataloader
+        model, epoch_loss, global_current_iteration = train_single_epoch(model, progress_bar, optimizer, total_iterations, global_current_iteration, warm_up_iters, warm_up_lrs, rank)
+        # Cosine scheduler after some steps.
+        # NOTE Do not apply cosine for the first warm_up_epochs, otherwise collides with warmup. First step considers base_lr not the current lr of the optimizer. Look here: https://pytorch.org/docs/stable/_modules/torch/optim/lr_scheduler.html#CosineAnnealingLR:~:text=elif%20self._step_count,optimizer.param_groups)%5D
+        if cur_epoch >= warm_up_epochs:
+            cosine_scheduler.step(epoch=cur_epoch-warm_up_epochs) # epoch gives warning
+        if rank == DEVICE:# save your improved network
             # NOTE I dont have to block here because backward pass synchronizes each rank/gpu process
+            save_model(rank, model=model, cur_epoch=cur_epoch, avg_epoch_loss=epoch_loss/iters_per_epoch, writer=writer)
     if USE_DDP:
         cleanup() # For multi GPU train.
 
