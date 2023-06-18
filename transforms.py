@@ -96,7 +96,7 @@ def common_augmentations(image, type_two = False):
 
 # 1. Get scene overlaps given the coordinates
 def get_scene_overlap(crop_coordinates_one, crop_coordinates_two):
-    # min_overlap_size = FILTER_SIZE*3/2 # filter scenes with too small overlap , NOTE might cause difference with original paper
+    min_overlap_size = FILTER_SIZE # filter scenes with too small overlap , NOTE might cause difference with original paper
     """ crop_coordinates are in t,l,h,w form (https://pytorch.org/vision/main/generated/torchvision.transforms.RandomResizedCrop.html)
     return scene as (x1, y1, x2, y2)"""
     def tlhw_to_xyxy_single(t,l,h,w):
@@ -118,7 +118,7 @@ def get_scene_overlap(crop_coordinates_one, crop_coordinates_two):
     coord_two = tlhw_to_xyxy_single(*crop_coordinates_two)
     (x1, y1, x2, y2) = get_overlap(coord_one, coord_two)
     # NOTE ideally you want: return None if (x2 - x1 < min_overlap_size or y2 - y1 < min_overlap_size) else (x1, y1, x2, y2)
-    return None if (x2==x1 or y2==y1) else (x1, y1, x2, y2)
+    return None if (x2 - x1 < min_overlap_size or y2 - y1 < min_overlap_size) else (x1, y1, x2, y2)
 
 
 def check_box_in_region(overlap_region, proposal_boxes):
