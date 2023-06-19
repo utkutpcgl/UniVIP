@@ -126,6 +126,8 @@ class NetWrapper(nn.Module):
         self.hidden.clear()
         
         assert not hidden.isnan().any(), "encoders produce nan values"
+        # TODO to debug this load the final 52th epoch weights and debug from there
+        # TODO might use torch.nan_to_num(input, nan=0.0, posinf=None, neginf=None, *, out=None)
         assert hidden is not None, f'hidden layer {self.layer} never emitted an output'
         return hidden
 
@@ -213,7 +215,9 @@ class UVIP(nn.Module):
         norm_vector_T = torch.norm(T_matrix, dim=-1, keepdim=True) # normalize over features
         # Step 3: Compute C
         ot_cosine_similarity_matrix = (dot_product_matrix / torch.matmul(norm_vector_O, norm_vector_T.transpose(1, 2)))# (batch_size, instance numbers K, instance numbers K)
+        # TODO 0 division might cause NaN
         cost_matrix = 1 - ot_cosine_similarity_matrix# (batch_size, instance numbers K, instance numbers K)
+        assert not ot_cosine_similarity_matrix.isnan().any(), "ot_cosine_similarity_matrix has NaN"
         # demander a, supplier b
         a_vector = torch.nn.functional.relu(torch.matmul(T_matrix, online_pred_avg.unsqueeze(dim=-1))) # (batch_size, instance numbers K, 1)
         b_vector = torch.nn.functional.relu(torch.matmul(O_matrix, target_proj_avg.unsqueeze(dim=-1))) # (batch_size, instance numbers K, 1)
@@ -271,7 +275,7 @@ class UVIP(nn.Module):
             target_proj_instance.detach_()
             target_proj_instance = target_proj_instance.reshape(batch_size, self.K_common_instances, target_proj_instance.shape[-1])
         
-
+        
         # CALCULATE LOSSES
         # Scene to scene loss
         loss_ss_one = self.byol_loss_fn(online_pred_one, target_proj_two.detach())
