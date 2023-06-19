@@ -118,7 +118,7 @@ def train_setup(rank, world_size):
     # Create the model.
     resnet = models.resnet50(weights=None).to(rank)
     model = UVIP(resnet).to(rank)
-    # model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model) # Not sure if UniVIP does this.
+    model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model) # Not sure if UniVIP does this.
     # NOTE To let a non-DDP model load a state dict from a DDP model, consume_prefix_in_state_dict_if_present() needs to be applied to strip the prefix “module.” in the DDP state dict before loading.
     if USE_DDP:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True) # will return ddp model output.

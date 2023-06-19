@@ -35,8 +35,6 @@ At the end you will have pkl files with bounding box proposals (filtered for 64 
 - The bounding box format of the proposals are (x,y,w,h), I am not sure what x and y are yet (center or upper left corner?)
 
 
-- It creates scenes for every image (every batch new pairs), does a batch have a single image? That would be strange.
-
 - I had to change the OS mmap limitation x4 with `sudo sysctl -w vm.max_map_count=<new_value>` (`sudo sysctl -w vm.max_map_count=262120`)
 
 # Maybe check these
@@ -51,6 +49,7 @@ Instance proposals are not very different sometimes. The paper says that optimal
 # My interpretation
 sinkhorn
 naive box generation
+overlapping box generation (minimum 64)
 
 
 # Difficulties

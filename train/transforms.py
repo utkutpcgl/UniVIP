@@ -79,19 +79,18 @@ def common_augmentations(image, type_two = False):
     """Could not use Compose with transformations due to RandomApply requirement."""
     image = T.RandomHorizontalFlip(p=0.5)(image)
     # since the order has to change (with randperm i get_params) I must use ColorJitter below.
-    image = T.ColorJitter(0.4, 0.4, 0.2, 0.1)(image)
-    image = RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)(image) # NOTE color jitter produces NaN values if the input image is not between 0-1.
+    image = (RandomApply(T.ColorJitter(0.4, 0.4, 0.2, 0.1), p = 0.8)(image)).clamp(min=0, max=1) # NOTE color jitter produces NaN values if the input image is not between 0-1.
     # Apply grayscale with probability 0.2
-    image = T.RandomGrayscale(p=0.2)(image)
+    image = (T.RandomGrayscale(p=0.2)(image)).clamp(min=0, max=1)
     # Apply gaussian blur with probability 0.2
     gaussian_prob = 0.1 if type_two else 1 # 1 for type_one
-    image = RandomApply(T.GaussianBlur((23, 23)), p = gaussian_prob)(image)
+    image = (RandomApply(T.GaussianBlur((23, 23)), p = gaussian_prob)(image)).clamp(min=0, max=1)
     solarize_prob = 0.2 if type_two else 0 # assymetric augm
     solarize_threshold = 0.5
-    image = T.RandomSolarize(threshold=solarize_threshold, p=solarize_prob)(image)
+    image = (T.RandomSolarize(threshold=solarize_threshold, p=solarize_prob)(image)).clamp(min=0, max=1)
     # NOTE toTensor not necessary because images are read with torchvision.io.read()
     # They apply normalization (not explicit in the paper: https://github.com/lucidrains/byol-pytorch/issues/4#issue-641183816)
-    image = T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))(image)
+    image = (T.Normalize(mean=torch.tensor([0.485, 0.456, 0.406]),std=torch.tensor([0.229, 0.224, 0.225]))(image)).clamp(min=0, max=1)
     return image
 
 

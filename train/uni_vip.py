@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from math import cos,pi
 
 from dataloader import IMAGE_SIZE
-from transforms import select_scenes, common_augmentations, get_concatenated_instances, K_COMMON_INSTANCES
+from transforms import common_augmentations, K_COMMON_INSTANCES
 from sink_knop_dist import SinkhornDistance
 
 # helper functions
