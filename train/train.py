@@ -27,8 +27,13 @@ LOG_DIR = Path("/home/kuartis-dgx1/utku/UniVIP/logs")
 LOG_DIR.mkdir(exist_ok=True)
 LAST_EPOCH_FILE = LOG_DIR/"last_epoch.txt"
 CHECKPOINT_PATH = LOG_DIR/"uni_vip_pretrained_model.pt"
+LOAD_CHECKPOINT = True
 VISUALIZE_SAMPLE_NUM = 20
 VISUALIZE = False
+DEBUG = True
+
+if DEBUG: # TODO last changes slew down the code abnormally.
+    torch.autograd.set_detect_anomaly(True) # TODO re-run with this to detect problem with optimizer steps.
 
 # DDP train settings.
 USE_DDP = True
@@ -66,6 +71,10 @@ def save_model(rank, model, cur_epoch, avg_epoch_loss, writer):
         log_text(str(LAST_EPOCH_FILE),cur_epoch)
         writer.add_scalar("Avg Loss", avg_epoch_loss, cur_epoch)
 
+def load_ddp_model(model, rank):
+    map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
+    model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=map_location))
+
 
 def ddp_setup(rank, world_size):
     # initialize the process group,  It ensures that every process will be able to coordinate through a master, using the same ip address and port. 
@@ -91,6 +100,7 @@ def train_single_epoch(model, progress_bar, optimizer, total_iterations, global_
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        assert not torch.stack([torch.isnan(p).any() for p in model.parameters()]).any(), "model has nan" # TODO retrain for this
         epoch_loss += loss.item()
         # After each step teacher is updated based on BYOL paper.
         # NOTE can update_moving_average for every device, because each device has its own/same copy, hence no need for extra rank block
@@ -122,6 +132,9 @@ def train_setup(rank, world_size):
     # NOTE To let a non-DDP model load a state dict from a DDP model, consume_prefix_in_state_dict_if_present() needs to be applied to strip the prefix “module.” in the DDP state dict before loading.
     if USE_DDP:
         model = DDP(model, device_ids=[rank], find_unused_parameters=True) # will return ddp model output.
+        # configure map_location properly
+        if LOAD_CHECKPOINT:
+            load_ddp_model(model=model, rank=rank)
     # save your improved network
     if rank == DEVICE:
         writer = SummaryWriter(log_dir=str(LOG_DIR))

@@ -114,6 +114,7 @@ class NetWrapper(nn.Module):
         return projector.to(hidden)
 
     def get_representation(self, x):
+        assert not torch.stack([torch.isnan(p).any() for p in self.net.parameters()]).any(), "self.net has nan"
         if self.layer == -1:
             return self.net(x)
 
@@ -224,6 +225,7 @@ class UVIP(nn.Module):
         _, optimal_plan_matrix = self.sinkhorn_distance(mu=a_vector,nu=b_vector,C=cost_matrix) # (batch_size, instance numbers K, instance numbers K)
         # torch.mul is element-wise multiplication, then sum all elements of the cost matrix, then results per batch are averaged with mean
         loss_ii = torch.sum(-torch.mul(optimal_plan_matrix,ot_cosine_similarity_matrix), dim=(-2,-1)).mean() # Forces similar instance representations to be close to each other.
+        assert not loss_ii.isnan().any(), "loss_ii has NaN"
         return loss_ii # Averaged out of convenience
 
     def forward(
@@ -281,13 +283,16 @@ class UVIP(nn.Module):
         loss_ss_one = self.byol_loss_fn(online_pred_one, target_proj_two.detach())
         loss_ss_two = self.byol_loss_fn(online_pred_two, target_proj_one.detach())
         loss_ss = loss_ss_one + loss_ss_two
+        assert not loss_ss.isnan().any(), "loss_ss has NaN"
         # Scene to instance loss
         loss_si_one = self.byol_loss_fn(online_concatenated_final_instance_representations, target_proj_one.detach())
         loss_si_two = self.byol_loss_fn(online_concatenated_final_instance_representations, target_proj_two.detach())
         loss_si = loss_si_one + loss_si_two
+        assert not loss_si.isnan().any(), "loss_si has NaN"
         # instance to instance loss (optimal transport and sinkhorn-knopp)
         online_pred_avg = (online_pred_one+online_pred_two)/2
         target_proj_avg = (target_proj_one.detach()+target_proj_two.detach())/2
         loss_ii = self.ii_loss_fn(online_pred_instance, target_proj_instance, online_pred_avg, target_proj_avg)
+        assert not loss_ii.isnan().any(), "loss_ii has NaN"
 
         return loss_ss + loss_si + loss_ii
