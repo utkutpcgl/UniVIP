@@ -9,19 +9,26 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
-import torchvision
-from pathlib import Path
 from torchvision import models
-from ..train.uni_vip import UVIP
+from uni_vip import UVIP
 from typing import OrderedDict
+import os
 
 EPOCHS = 28
 NUM_CLASSES = 1000
 NUM_WORKERS = 4
 BATCH_SIZE = 256
 IMAGE_SIZE = 224
-LOG_DIR = Path("/home/kuartis-dgx1/utku/UniVIP/logs")
-CHECKPOINT_PATH = LOG_DIR/"uni_vip_pretrained_model.pt"
+CHECKPOINT_PATH = "/home/kuartis-dgx1/utku/UniVIP/train/uni_vip_pretrained_model.pt"
+
+def ddp_setup(rank, world_size):
+    # initialize the process group,  It ensures that every process will be able to coordinate through a master, using the same ip address and port. 
+    # nccl backend is currently the fastest and highly recommended backend when using GPUs. This applies to both single-node and multi-node distributed training. https://pytorch.org/docs/master/generated/torch.nn.parallel.DistributedDataParallel.html 
+    # NOTE might set ,timeout= to avoid any timeout during random box selection (might lose synchronization)
+    dist.init_process_group(backend='nccl',rank=rank, world_size=world_size) # For multi GPU train.
+
+def cleanup():
+    dist.destroy_process_group()
 
 # Define the ResNet model
 def get_single_resnet():
@@ -77,12 +84,13 @@ def get_transforms():
     return train_transforms, val_transforms
     
 
-def train(local_rank, single_resnet):
+def train(rank, world_size, single_resnet):
     # Define the model, loss function, and optimizer
-    ddp_resnet = get_ddp_resnet(single_resnet=single_resnet)
+    ddp_setup(rank=rank, world_size=world_size)
+    ddp_resnet = get_ddp_resnet(single_resnet=single_resnet, rank=rank)
     # Set up the distributed environment
     dist.init_process_group(backend='nccl')
-    torch.cuda.set_device(local_rank)
+    torch.cuda.set_device(rank)
     
     # Set random seed for reproducibility
     torch.manual_seed(0)
@@ -108,8 +116,8 @@ def train(local_rank, single_resnet):
         ddp_resnet.train()
         
         for images, labels in train_loader:
-            images = images.to(local_rank)
-            labels = labels.to(local_rank)
+            images = images.to(rank)
+            labels = labels.to(rank)
             
             # Forward pass
             outputs = ddp_resnet(images)
@@ -124,7 +132,7 @@ def train(local_rank, single_resnet):
         lr_scheduler.step()
         
         # Print training progress
-        if local_rank == 0:
+        if rank == 0:
             print(f"Epoch [{epoch+1}/{num_epochs}] completed.")
     
     # Evaluation on validation split
@@ -136,8 +144,8 @@ def train(local_rank, single_resnet):
     correct_predictions = 0
     
     for images, labels in val_loader:
-        images = images.to(local_rank)
-        labels = labels.to(local_rank)
+        images = images.to(rank)
+        labels = labels.to(rank)
         
         with torch.no_grad():
             outputs = ddp_resnet(images)
@@ -148,14 +156,17 @@ def train(local_rank, single_resnet):
     accuracy = correct_predictions / total_samples * 100
     
     # Print the top-1 center-crop accuracy on the validation split
-    if local_rank == 0:
+    if rank == 0:
         print(f"Top-1 Accuracy: {accuracy:.2f}%")
+    cleanup()
 
 def main():
     # Set the number of GPUs and spawn multiple processes
     single_resnet = get_single_resnet()
     num_gpus = 8
-    mp.spawn(train, nprocs=num_gpus, args=(num_gpus,single_resnet))
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12356' # set port for communication
+    mp.spawn(train, nprocs=num_gpus, args=(num_gpus,single_resnet), join=True)
     
 if __name__ == '__main__':
     main()
