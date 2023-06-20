@@ -73,7 +73,9 @@ def save_model(rank, model, cur_epoch, avg_epoch_loss, writer):
 
 def load_ddp_model(model, rank):
     map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
-    model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=map_location))
+    state_dict = torch.load(CHECKPOINT_PATH, map_location=map_location)
+    # There is a mismatch with the pretrained weight variables. Because projector is created afterwards.
+    model.load_state_dict({k: state_dict[k] for k in state_dict if k in model.state_dict()})
 
 
 def ddp_setup(rank, world_size):
