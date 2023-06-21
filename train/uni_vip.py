@@ -6,7 +6,7 @@ from torch import nn
 import torch.nn.functional as F
 from math import cos,pi
 
-from dataloader import IMAGE_SIZE
+from UniVIP.train.dataloader_uvip import IMAGE_SIZE
 from transforms import common_augmentations, K_COMMON_INSTANCES
 from sink_knop_dist import SinkhornDistance
 

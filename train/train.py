@@ -13,7 +13,7 @@ from uni_vip import UVIP
 import torch
 from torchvision import models
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from dataloader import init_dataset, vis_some_samples
+from UniVIP.train.dataloader_uvip import init_dataset, vis_some_samples
 from math import ceil
 
 from torch.nn.parallel import DistributedDataParallel as DDP

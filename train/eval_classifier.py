@@ -17,6 +17,7 @@ from icecream import ic
 from pathlib import Path
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from dataloader_IN import ImageNetKaggleDataset
 
 DEVICE = 0 # main device rank.
 EPOCHS = 28
@@ -55,8 +56,10 @@ def save_model(rank, model, cur_epoch, avg_epoch_loss, accuracy, writer):
         torch.save(model.state_dict(), str(CHECKPOINT_PATH))
         # Log the last epoch
         log_text(str(LAST_EPOCH_FILE),cur_epoch)
-        writer.add_scalar("Avg Loss", avg_epoch_loss, cur_epoch)
-        writer.add_scalar("Accuracy", accuracy, cur_epoch)
+        if accuracy:
+            writer.add_scalar("Accuracy", accuracy, cur_epoch)
+        if avg_epoch_loss:
+            writer.add_scalar("Avg Loss", avg_epoch_loss, cur_epoch)
 
 # Define the ResNet model
 def get_single_resnet():
@@ -92,8 +95,9 @@ def get_single_resnet():
 
 def get_ddp_resnet(single_resnet, rank):
     single_resnet = single_resnet.to(rank)
-    single_resnet = DDP(single_resnet, device_ids=[rank])
-    single_resnet = torch.nn.SyncBatchNorm.convert_sync_batchnorm(single_resnet) # Not sure if UniVIP does this.
+    ddp_resnet = DDP(single_resnet, device_ids=[rank])
+    ddp_resnet = torch.nn.SyncBatchNorm.convert_sync_batchnorm(single_resnet) # Not sure if UniVIP does this.
+    return ddp_resnet
 
 
 def get_transforms():
@@ -116,12 +120,12 @@ def get_dataloaders():
     ic("load data")
     # Define the dataset and data loader
     train_transforms, val_transforms = get_transforms()
-    train_dataset = datasets.ImageNet(root='/raid/utku/datasets/imagenet/ILSVRC/Data/CLS-LOC/train', split='train', transform=train_transforms)
-    val_dataset = datasets.ImageNet(root='/raid/utku/datasets/imagenet/ILSVRC/Data/CLS-LOC/val', split='val', transform=val_transforms)
+    train_dataset = ImageNetKaggleDataset(split="train",transform=train_transforms)
+    val_dataset = ImageNetKaggleDataset(split="val",transform=val_transforms)
     train_sampler = DistributedSampler(train_dataset, shuffle=True)
     val_sampler = DistributedSampler(val_dataset)
-    train_loader = DataLoader(train_dataset, BATCH_SIZE=BATCH_SIZE, sampler=train_sampler, NUM_WORKERS=NUM_WORKERS)
-    val_loader = DataLoader(val_dataset, BATCH_SIZE=BATCH_SIZE, sampler=val_sampler, NUM_WORKERS=NUM_WORKERS)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=train_sampler, num_workers=NUM_WORKERS)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=val_sampler, num_workers=NUM_WORKERS)
     return train_loader, train_sampler, val_loader
 
 def train(rank, world_size, single_resnet):
@@ -150,11 +154,12 @@ def train(rank, world_size, single_resnet):
     # Training loop
     num_epochs = 28
     ic("Start training")
-    for epoch in tqdm(range(num_epochs)):
+    for epoch in range(num_epochs):
         train_sampler.set_epoch(epoch)
         ddp_resnet.train()
         total_epoch_loss = 0
-        for images, labels in train_loader:
+        progress_bar_train = tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}", position=0, leave=True) if rank==DEVICE else train_loader
+        for images, labels in progress_bar_train:
             images = images.to(rank)
             labels = labels.to(rank)
             
@@ -166,6 +171,7 @@ def train(rank, world_size, single_resnet):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            break
         
         # Learning rate scheduling
         lr_scheduler.step()
@@ -176,6 +182,7 @@ def train(rank, world_size, single_resnet):
         # Print training progress
         if rank == 0:
             ic(f"Epoch [{epoch+1}/{num_epochs}] completed.")
+        break
     
     # Evaluation on validation split
     ddp_resnet.eval()
@@ -185,7 +192,8 @@ def train(rank, world_size, single_resnet):
     correct_predictions = 0
     
     ic("Start validation")
-    for images, labels in tqdm(val_loader):
+    progress_bar_val = tqdm(val_loader, desc="Validate", position=0, leave=True) if rank==DEVICE else val_loader
+    for images, labels in progress_bar_val:
         images = images.to(rank)
         labels = labels.to(rank)
         
@@ -194,6 +202,7 @@ def train(rank, world_size, single_resnet):
             _, predicted = torch.max(outputs.data, 1)
             total_samples += labels.size(0)
             correct_predictions += (predicted == labels).sum().item()
+        break
     
     # accuracy = correct_predictions / total_samples * 100
     
@@ -217,7 +226,10 @@ def train(rank, world_size, single_resnet):
         global_correct_predictions = correct_predictions_tensor.item()
         global_total_samples = total_samples_tensor.item()
         global_accuracy = global_correct_predictions / global_total_samples * 100
-        ic(f"Global Top-1 Accuracy: {global_accuracy:.2f}%")
+        results_txt = f"Global Top-1 Accuracy: {global_accuracy:.2f}%"
+        ic(results_txt)
+        with open("eval_results.txt", "w") as eval_writer:
+            eval_writer.write(results_txt)
     cleanup()
 
 def main():
