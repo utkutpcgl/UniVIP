@@ -48,7 +48,7 @@ def log_text(file, content):
         f.write(str(content))
 
 
-def save_model(rank, model, cur_epoch, avg_epoch_loss, accuracy, writer):
+def save_model(rank, model, cur_epoch, avg_epoch_loss, writer, accuracy=None):
     # save your improved network
     if rank == DEVICE:
         ic("saving network")
@@ -56,8 +56,6 @@ def save_model(rank, model, cur_epoch, avg_epoch_loss, accuracy, writer):
         torch.save(model.state_dict(), str(CHECKPOINT_PATH))
         # Log the last epoch
         log_text(str(LAST_EPOCH_FILE),cur_epoch)
-        if accuracy:
-            writer.add_scalar("Accuracy", accuracy, cur_epoch)
         if avg_epoch_loss:
             writer.add_scalar("Avg Loss", avg_epoch_loss, cur_epoch)
 
@@ -116,8 +114,9 @@ def get_transforms():
                         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
     return train_transforms, val_transforms
 
-def get_dataloaders():
-    ic("load data")
+def get_dataloaders(rank):
+    if rank == DEVICE:
+        ic("load data")
     # Define the dataset and data loader
     train_transforms, val_transforms = get_transforms()
     train_dataset = ImageNetKaggleDataset(split="train",transform=train_transforms)
@@ -128,32 +127,34 @@ def get_dataloaders():
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=val_sampler, num_workers=NUM_WORKERS)
     return train_loader, train_sampler, val_loader
 
-def train(rank, world_size, single_resnet):
+def train_eval(rank, world_size, single_resnet, only_eval=False):
     # Define the model, loss function, and optimizer
     ddp_setup(rank=rank, world_size=world_size)
     ddp_resnet = get_ddp_resnet(single_resnet=single_resnet, rank=rank)
     # Set up the distributed environment
     torch.cuda.set_device(rank)
-    
     # Set random seed for reproducibility
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
+    train_loader, train_sampler, val_loader = get_dataloaders(rank)
+    if not only_eval:
+        train(ddp_resnet, rank, train_sampler, train_loader)
+    eval(ddp_resnet, rank, val_loader)
+
     
+def train(ddp_resnet, rank, train_sampler, train_loader):
     # Dataloaders and train sampler
-    train_loader, train_sampler, val_loader = get_dataloaders()
-    
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(ddp_resnet.parameters(), lr=0.01, momentum=0.9, weight_decay=0.0001)
     lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10, 20], gamma=0.1)
-
     # test saving.
     if rank == DEVICE:
         writer = SummaryWriter(log_dir=str(LOG_DIR))
-        save_model(rank=rank, model=ddp_resnet, cur_epoch=0, avg_epoch_loss=0, accuracy=0, writer=writer)
-    
+        save_model(rank=rank, model=ddp_resnet, cur_epoch=0, avg_epoch_loss=0, writer=writer)
     # Training loop
     num_epochs = 28
-    ic("Start training")
+    if rank == DEVICE:
+        ic("Start training")
     for epoch in range(num_epochs):
         train_sampler.set_epoch(epoch)
         ddp_resnet.train()
@@ -162,7 +163,6 @@ def train(rank, world_size, single_resnet):
         for images, labels in progress_bar_train:
             images = images.to(rank)
             labels = labels.to(rank)
-            
             # Forward pass
             outputs = ddp_resnet(images)
             loss = criterion(outputs, labels)
@@ -172,26 +172,23 @@ def train(rank, world_size, single_resnet):
             loss.backward()
             optimizer.step()
             break
-        
         # Learning rate scheduling
         lr_scheduler.step()
         if rank == DEVICE:
             avg_epoch_loss = total_epoch_loss/len(train_loader) # returns ceil(length / self.batch_size)
             save_model(rank=rank, model=ddp_resnet, cur_epoch=epoch, avg_epoch_loss=avg_epoch_loss, writer=writer)
-        
         # Print training progress
         if rank == 0:
             ic(f"Epoch [{epoch+1}/{num_epochs}] completed.")
         break
-    
+
+def eval(ddp_resnet, rank, val_loader):
     # Evaluation on validation split
     ddp_resnet.eval()
-    
-    
     total_samples = 0
     correct_predictions = 0
-    
-    ic("Start validation")
+    if rank == DEVICE:
+        ic("Start validation")
     progress_bar_val = tqdm(val_loader, desc="Validate", position=0, leave=True) if rank==DEVICE else val_loader
     for images, labels in progress_bar_val:
         images = images.to(rank)
@@ -202,31 +199,26 @@ def train(rank, world_size, single_resnet):
             _, predicted = torch.max(outputs.data, 1)
             total_samples += labels.size(0)
             correct_predictions += (predicted == labels).sum().item()
-        break
-    
-    # accuracy = correct_predictions / total_samples * 100
-    
-    # # Print the top-1 center-crop accuracy on the validation split
-    # if rank == 0:
-    #     ic(f"Top-1 Accuracy: {accuracy:.2f}%")
 
     # NOTE calculate accuracy across all ranks (globally in DDP):
-
+    torch.distributed.barrier()
     # Wrap total_samples and correct_predictions as tensors
     correct_predictions_tensor = torch.tensor(correct_predictions).to(rank)
     total_samples_tensor = torch.tensor(total_samples).to(rank)
 
+    torch.distributed.barrier()
     # Sum the tensors across all ranks
     dist.all_reduce(correct_predictions_tensor, op=dist.ReduceOp.SUM)
     dist.all_reduce(total_samples_tensor, op=dist.ReduceOp.SUM)
 
+    torch.distributed.barrier()
     # Calculate accuracy on rank 0
     if rank == DEVICE:
         # Convert tensors back to python scalars
         global_correct_predictions = correct_predictions_tensor.item()
         global_total_samples = total_samples_tensor.item()
         global_accuracy = global_correct_predictions / global_total_samples * 100
-        results_txt = f"Global Top-1 Accuracy: {global_accuracy:.2f}%"
+        results_txt = f"Global Top-1 Accuracy: {global_accuracy:.4f}%"
         ic(results_txt)
         with open("eval_results.txt", "w") as eval_writer:
             eval_writer.write(results_txt)
@@ -236,9 +228,10 @@ def main():
     # Set the number of GPUs and spawn multiple processes
     single_resnet = get_single_resnet()
     num_gpus = 8
+    eval_only = False
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12356' # set port for communication
-    mp.spawn(train, nprocs=num_gpus, args=(num_gpus,single_resnet), join=True)
+    mp.spawn(train_eval, nprocs=num_gpus, args=(num_gpus,single_resnet,eval_only), join=True)
     
 if __name__ == '__main__':
     main()
