@@ -1,5 +1,6 @@
 """ They use random resized crop for training 
 https://github.com/Jiahao000/ORL/blob/2ad64f7389d20cb1d955792aabbe806a7097e6fb/configs/benchmarks/linear_classification/imagenet/r50_multihead_28ep.py#L24"""
+
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -22,12 +23,17 @@ from dataloader_IN import ImageNetKaggleDataset
 DEVICE = 0 # main device rank.
 EPOCHS = 28
 NUM_CLASSES = 1000
-NUM_WORKERS = 4
-BATCH_SIZE = 256
+NUM_WORKERS = 8
+WORLD_SIZE = 8
+GLOBAL_BATCH_SIZE = 256
+LOCAL_BATCH_SIZE = 256 // WORLD_SIZE
 IMAGE_SIZE = 224
 UVIP_PRETRAIN_PT_PATH = "/home/kuartis-dgx1/utku/UniVIP/train/uni_vip_pretrained_model.pt"
+EVAL_ONLY = False # No train only evaluation.
+LR_SCALAR = (LOCAL_BATCH_SIZE*WORLD_SIZE)/GLOBAL_BATCH_SIZE # normally should be 1.
+LR = 0.01*LR_SCALAR
 
-LOG_DIR = Path("/home/kuartis-dgx1/utku/UniVIP/classification_logs")
+LOG_DIR = Path(f"/home/kuartis-dgx1/utku/UniVIP/classification_logs_{WORLD_SIZE}")
 LOG_DIR.mkdir(exist_ok=True)
 LAST_EPOCH_FILE = LOG_DIR/"last_epoch.txt"
 CHECKPOINT_PATH = LOG_DIR/"uvip_imagenet_linear_prob.pt"
@@ -63,7 +69,7 @@ def save_model(rank, model, cur_epoch, avg_epoch_loss, writer, accuracy=None):
 def get_single_resnet():
     # If you're in a distributed environment, make sure all processes are synchronized before loading
     # state_dict = model.state_dict()
-    state_dict = torch.load(UVIP_PRETRAIN_PT_PATH, map_location=lambda storage, loc: storage.cuda(0))
+    state_dict = torch.load(UVIP_PRETRAIN_PT_PATH, map_location=lambda storage, loc: storage.cuda(DEVICE))
     new_state_dict = {}
 
     module_key_prefix = "module.online_encoder.net."
@@ -123,8 +129,8 @@ def get_dataloaders(rank):
     val_dataset = ImageNetKaggleDataset(split="val",transform=val_transforms)
     train_sampler = DistributedSampler(train_dataset, shuffle=True)
     val_sampler = DistributedSampler(val_dataset)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, sampler=train_sampler, num_workers=NUM_WORKERS)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, sampler=val_sampler, num_workers=NUM_WORKERS)
+    train_loader = DataLoader(train_dataset, batch_size=LOCAL_BATCH_SIZE, sampler=train_sampler, num_workers=NUM_WORKERS)
+    val_loader = DataLoader(val_dataset, batch_size=LOCAL_BATCH_SIZE, sampler=val_sampler, num_workers=NUM_WORKERS)
     return train_loader, train_sampler, val_loader
 
 def train_eval(rank, world_size, single_resnet, only_eval=False):
@@ -219,18 +225,16 @@ def eval(ddp_resnet, rank, val_loader):
         global_accuracy = global_correct_predictions / global_total_samples * 100
         results_txt = f"Global Top-1 Accuracy: {global_accuracy:.4f}%"
         ic(results_txt)
-        with open("eval_results.txt", "w") as eval_writer:
+        with open(f"eval_results_{WORLD_SIZE}.txt", "w") as eval_writer:
             eval_writer.write(results_txt)
     cleanup()
 
 def main():
     # Set the number of GPUs and spawn multiple processes
     single_resnet = get_single_resnet()
-    num_gpus = 8
-    eval_only = False
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12356' # set port for communication
-    mp.spawn(train_eval, nprocs=num_gpus, args=(num_gpus,single_resnet,eval_only), join=True)
+    os.environ['MASTER_PORT'] = '12357' # set port for communication
+    mp.spawn(train_eval, nprocs=WORLD_SIZE, args=(WORLD_SIZE,single_resnet,EVAL_ONLY), join=True)
     
 if __name__ == '__main__':
     main()
