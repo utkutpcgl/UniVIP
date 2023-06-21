@@ -8,18 +8,28 @@ import torch.optim as optim
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader
 from torchvision import models
-from uni_vip import UVIP
 from typing import OrderedDict
 import os
+from icecream import ic
+from pathlib import Path
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
+DEVICE = 0 # main device rank.
 EPOCHS = 28
 NUM_CLASSES = 1000
 NUM_WORKERS = 4
 BATCH_SIZE = 256
 IMAGE_SIZE = 224
-CHECKPOINT_PATH = "/home/kuartis-dgx1/utku/UniVIP/train/uni_vip_pretrained_model.pt"
+UVIP_PRETRAIN_PT_PATH = "/home/kuartis-dgx1/utku/UniVIP/train/uni_vip_pretrained_model.pt"
+
+LOG_DIR = Path("/home/kuartis-dgx1/utku/UniVIP/classification_logs")
+LOG_DIR.mkdir(exist_ok=True)
+LAST_EPOCH_FILE = LOG_DIR/"last_epoch.txt"
+CHECKPOINT_PATH = LOG_DIR/"uvip_imagenet_linear_prob.pt"
 
 def ddp_setup(rank, world_size):
     # initialize the process group,  It ensures that every process will be able to coordinate through a master, using the same ip address and port. 
@@ -30,18 +40,35 @@ def ddp_setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
+# Helper functions
+def log_text(file, content):
+    # Log the last epoch
+    with open(file, "w") as f:
+        f.write(str(content))
+
+
+def save_model(rank, model, cur_epoch, avg_epoch_loss, accuracy, writer):
+    # save your improved network
+    if rank == DEVICE:
+        ic("saving network")
+        # Therefore, saving it in one process is sufficient.
+        torch.save(model.state_dict(), str(CHECKPOINT_PATH))
+        # Log the last epoch
+        log_text(str(LAST_EPOCH_FILE),cur_epoch)
+        writer.add_scalar("Avg Loss", avg_epoch_loss, cur_epoch)
+        writer.add_scalar("Accuracy", accuracy, cur_epoch)
+
 # Define the ResNet model
 def get_single_resnet():
     # If you're in a distributed environment, make sure all processes are synchronized before loading
-    resnet = models.resnet50(weights=None)
-    model = UVIP(resnet)
-
-    state_dict = model.state_dict()
+    # state_dict = model.state_dict()
+    state_dict = torch.load(UVIP_PRETRAIN_PT_PATH, map_location=lambda storage, loc: storage.cuda(0))
     new_state_dict = {}
 
+    module_key_prefix = "module.online_encoder.net."
     for name, param in state_dict.items():
-        if name.startswith("online_encoder"):
-            new_state_dict[name.replace("online_encoder.net.", "")] = param
+        if name.startswith(module_key_prefix):
+            new_state_dict[name.replace(module_key_prefix, "")] = param
 
     new_linear_layer = torch.nn.Linear(2048, 1000)
     new_state_dict["fc.weight"] = new_linear_layer.weight
@@ -59,7 +86,9 @@ def get_single_resnet():
     # Enable training for the new linear layer
     for param in resnet.fc.parameters():
         param.requires_grad = True
+    resnet = torch.nn.SyncBatchNorm.convert_sync_batchnorm(resnet) # Not sure if UniVIP does this.
     return resnet
+
 
 def get_ddp_resnet(single_resnet, rank):
     single_resnet = single_resnet.to(rank)
@@ -82,39 +111,49 @@ def get_transforms():
                         transforms.ToTensor(),
                         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
     return train_transforms, val_transforms
-    
+
+def get_dataloaders():
+    ic("load data")
+    # Define the dataset and data loader
+    train_transforms, val_transforms = get_transforms()
+    train_dataset = datasets.ImageNet(root='/raid/utku/datasets/imagenet/ILSVRC/Data/CLS-LOC/train', split='train', transform=train_transforms)
+    val_dataset = datasets.ImageNet(root='/raid/utku/datasets/imagenet/ILSVRC/Data/CLS-LOC/val', split='val', transform=val_transforms)
+    train_sampler = DistributedSampler(train_dataset, shuffle=True)
+    val_sampler = DistributedSampler(val_dataset)
+    train_loader = DataLoader(train_dataset, BATCH_SIZE=BATCH_SIZE, sampler=train_sampler, NUM_WORKERS=NUM_WORKERS)
+    val_loader = DataLoader(val_dataset, BATCH_SIZE=BATCH_SIZE, sampler=val_sampler, NUM_WORKERS=NUM_WORKERS)
+    return train_loader, train_sampler, val_loader
 
 def train(rank, world_size, single_resnet):
     # Define the model, loss function, and optimizer
     ddp_setup(rank=rank, world_size=world_size)
     ddp_resnet = get_ddp_resnet(single_resnet=single_resnet, rank=rank)
     # Set up the distributed environment
-    dist.init_process_group(backend='nccl')
     torch.cuda.set_device(rank)
     
     # Set random seed for reproducibility
     torch.manual_seed(0)
     torch.cuda.manual_seed(0)
     
-    # Define the batch size and number of workers
-    
-    # Define the dataset and data loader
-    train_transforms, val_transforms = get_transforms()
-    
-    train_dataset = datasets.ImageNet(root='imagenet/train', split='train', transform=train_transforms)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    train_loader = DataLoader(train_dataset, BATCH_SIZE=BATCH_SIZE, sampler=train_sampler, NUM_WORKERS=NUM_WORKERS)
+    # Dataloaders and train sampler
+    train_loader, train_sampler, val_loader = get_dataloaders()
     
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(ddp_resnet.parameters(), lr=0.01, momentum=0.9, weight_decay=0.0001)
     lr_scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10, 20], gamma=0.1)
+
+    # test saving.
+    if rank == DEVICE:
+        writer = SummaryWriter(log_dir=str(LOG_DIR))
+        save_model(rank=rank, model=ddp_resnet, cur_epoch=0, avg_epoch_loss=0, accuracy=0, writer=writer)
     
     # Training loop
     num_epochs = 28
-    for epoch in range(num_epochs):
+    ic("Start training")
+    for epoch in tqdm(range(num_epochs)):
         train_sampler.set_epoch(epoch)
         ddp_resnet.train()
-        
+        total_epoch_loss = 0
         for images, labels in train_loader:
             images = images.to(rank)
             labels = labels.to(rank)
@@ -122,7 +161,7 @@ def train(rank, world_size, single_resnet):
             # Forward pass
             outputs = ddp_resnet(images)
             loss = criterion(outputs, labels)
-            
+            total_epoch_loss += loss.detach()
             # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
@@ -130,20 +169,23 @@ def train(rank, world_size, single_resnet):
         
         # Learning rate scheduling
         lr_scheduler.step()
+        if rank == DEVICE:
+            avg_epoch_loss = total_epoch_loss/len(train_loader) # returns ceil(length / self.batch_size)
+            save_model(rank=rank, model=ddp_resnet, cur_epoch=epoch, avg_epoch_loss=avg_epoch_loss, writer=writer)
         
         # Print training progress
         if rank == 0:
-            print(f"Epoch [{epoch+1}/{num_epochs}] completed.")
+            ic(f"Epoch [{epoch+1}/{num_epochs}] completed.")
     
     # Evaluation on validation split
     ddp_resnet.eval()
-    val_dataset = datasets.ImageNet(root='imagenet/val', split='val', transform=val_transforms)
-    val_loader = DataLoader(val_dataset, BATCH_SIZE=BATCH_SIZE, shuffle=False, NUM_WORKERS=NUM_WORKERS)
+    
     
     total_samples = 0
     correct_predictions = 0
     
-    for images, labels in val_loader:
+    ic("Start validation")
+    for images, labels in tqdm(val_loader):
         images = images.to(rank)
         labels = labels.to(rank)
         
@@ -153,11 +195,29 @@ def train(rank, world_size, single_resnet):
             total_samples += labels.size(0)
             correct_predictions += (predicted == labels).sum().item()
     
-    accuracy = correct_predictions / total_samples * 100
+    # accuracy = correct_predictions / total_samples * 100
     
-    # Print the top-1 center-crop accuracy on the validation split
-    if rank == 0:
-        print(f"Top-1 Accuracy: {accuracy:.2f}%")
+    # # Print the top-1 center-crop accuracy on the validation split
+    # if rank == 0:
+    #     ic(f"Top-1 Accuracy: {accuracy:.2f}%")
+
+    # NOTE calculate accuracy across all ranks (globally in DDP):
+
+    # Wrap total_samples and correct_predictions as tensors
+    correct_predictions_tensor = torch.tensor(correct_predictions).to(rank)
+    total_samples_tensor = torch.tensor(total_samples).to(rank)
+
+    # Sum the tensors across all ranks
+    dist.all_reduce(correct_predictions_tensor, op=dist.ReduceOp.SUM)
+    dist.all_reduce(total_samples_tensor, op=dist.ReduceOp.SUM)
+
+    # Calculate accuracy on rank 0
+    if rank == DEVICE:
+        # Convert tensors back to python scalars
+        global_correct_predictions = correct_predictions_tensor.item()
+        global_total_samples = total_samples_tensor.item()
+        global_accuracy = global_correct_predictions / global_total_samples * 100
+        ic(f"Global Top-1 Accuracy: {global_accuracy:.2f}%")
     cleanup()
 
 def main():

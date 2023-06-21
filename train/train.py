@@ -137,7 +137,7 @@ def train_setup(rank, world_size):
         # configure map_location properly
         if LOAD_CHECKPOINT:
             load_ddp_model(model=model, rank=rank)
-    # save your improved network
+    # save your network test
     if rank == DEVICE:
         writer = SummaryWriter(log_dir=str(LOG_DIR))
         # save_model(rank,model=model,cur_epoch=0, avg_epoch_loss=0, writer=writer)
