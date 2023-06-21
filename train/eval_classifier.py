@@ -171,7 +171,6 @@ def train(ddp_resnet, rank, train_sampler, train_loader):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            break
         # Learning rate scheduling
         lr_scheduler.step()
         if rank == DEVICE:
@@ -180,7 +179,7 @@ def train(ddp_resnet, rank, train_sampler, train_loader):
         # Print training progress
         if rank == 0:
             ic(f"Epoch [{epoch+1}/{num_epochs}] completed.")
-        break
+    ic("Finished training!")
 
 def eval(ddp_resnet, rank, val_loader):
     # Evaluation on validation split
